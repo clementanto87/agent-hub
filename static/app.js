@@ -713,6 +713,112 @@ async function openFileSheet(filePath) {
   }
 }
 
+async function openGitChangesSheet(fileToDiff = null) {
+  openSheet(`
+    <div class="browser-header">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="margin:0;">Project Code Changes</h3>
+        <span class="muted sm mono" style="font-size:11px;">${esc(basename(state.workspace))}</span>
+      </div>
+      <p class="lead" style="margin:0;">Modified code in green (+) and removed code in red (-).</p>
+    </div>
+    <div style="color:var(--text-3); font-size:13px; text-align:center; padding:24px 0;">Inspecting repository changes…</div>
+  `);
+
+  try {
+    const data = await api(`/api/git/changes?workspace=${encodeURIComponent(state.workspace)}`);
+    if (!data.is_git) {
+      openSheet(`
+        <h3>Project Code Changes</h3>
+        <p class="lead">${esc(data.summary || 'Not a git repository.')}</p>
+        <div class="empty-inline" style="margin-top:12px;">The active folder <code>${esc(state.workspace)}</code> is not a git repository.</div>
+      `);
+      return;
+    }
+
+    if (!data.files || !data.files.length) {
+      openSheet(`
+        <div class="browser-header">
+          <h3 style="margin:0;">Project Code Changes</h3>
+          <p class="lead" style="margin:0;">Working tree is clean.</p>
+        </div>
+        <div class="empty-inline" style="margin-top:14px;">
+          ✨ No uncommitted code changes in <code>${esc(basename(state.workspace))}</code>.
+        </div>
+      `);
+      return;
+    }
+
+    if (fileToDiff) {
+      const diffRes = await api(`/api/git/diff?workspace=${encodeURIComponent(state.workspace)}&file=${encodeURIComponent(fileToDiff)}`);
+      const { html, adds, dels } = formatDiffCode(diffRes.diff || 'No diff content available for this file.');
+      openSheet(`
+        <div class="browser-header">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <button class="btn btn-ghost btn-sm" data-action="open-git-changes" style="padding:2px 8px; font-size:12px;">← Back to files</button>
+            <span class="diff-stats"><span class="diff-badge-add">+${adds}</span> <span class="diff-badge-del">-${dels}</span></span>
+          </div>
+          <h3 style="margin:4px 0 0 0; font-family:var(--mono); font-size:13px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(fileToDiff)}</h3>
+        </div>
+        <div class="git-diff-view" style="margin-top:10px;">${html}</div>
+      `);
+      return;
+    }
+
+    const fileItems = data.files.map((f) => {
+      const stCls = f.status.includes('M') ? 'M' : (f.status.includes('A') || f.status.includes('?') ? 'A' : (f.status.includes('D') ? 'D' : 'M'));
+      const stLabel = f.status.includes('?') ? 'NEW' : f.status;
+      return `
+        <div class="git-change-item" data-action="view-file-diff" data-file="${esc(f.path)}">
+          <div class="git-change-info">
+            <span class="git-status-tag ${stCls}">${esc(stLabel)}</span>
+            <span class="git-change-path" title="${esc(f.path)}">${esc(f.path)}</span>
+          </div>
+          <div class="diff-stats">
+            ${f.adds > 0 ? `<span class="diff-badge-add">+${f.adds}</span>` : ''}
+            ${f.dels > 0 ? `<span class="diff-badge-del">-${f.dels}</span>` : ''}
+            <svg class="i xs muted"><use href="#i-chevron"/></svg>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    openSheet(`
+      <div class="browser-header">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h3 style="margin:0;">Project Code Changes</h3>
+          <span class="diff-stats"><span class="diff-badge-add">+${data.total_adds}</span> <span class="diff-badge-del">-${data.total_dels}</span></span>
+        </div>
+        <p class="lead" style="margin:0;">${data.files.length} changed file${data.files.length === 1 ? '' : 's'} in <code>${esc(basename(state.workspace))}</code>. Tap any file to inspect red/green changes.</p>
+      </div>
+      <div class="git-changes-list" style="margin-top:10px;">
+        ${fileItems}
+      </div>
+    `);
+  } catch (e) {
+    toast('Could not inspect git changes', 'err');
+  }
+}
+
+async function checkGitChanges() {
+  const btn = $('#gitChangesBtn');
+  if (!btn) return;
+  try {
+    const data = await api(`/api/git/changes?workspace=${encodeURIComponent(state.workspace)}`);
+    if (data.is_git && data.files && data.files.length > 0) {
+      btn.hidden = false;
+      const sumEl = $('#gitChangesSummary');
+      if (sumEl) {
+        sumEl.innerHTML = `<span style="color:#4ade80">+${data.total_adds}</span> <span style="color:#f87171">-${data.total_dels}</span>`;
+      }
+    } else {
+      btn.hidden = true;
+    }
+  } catch {
+    btn.hidden = true;
+  }
+}
+
 async function openWorkspaceSheet(browsePath) {
   if (typeof browsePath === 'string' && browsePath.trim()) {
     currentBrowsingPath = browsePath.trim();
@@ -953,6 +1059,7 @@ function applyWorkspace() {
   $('#wsChipLabel').textContent = basename(state.workspace);
   $('#setWsSub').textContent = state.workspace;
   store.set('workspace', state.workspace);
+  checkGitChanges();
 }
 
 function setWorkspace(path) {
@@ -1006,6 +1113,31 @@ function mdToHtml(text) {
   return DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: true }));
 }
 
+function formatDiffCode(rawCode) {
+  const lines = (rawCode || '').split('\n');
+  let adds = 0;
+  let dels = 0;
+  const htmlLines = lines.map((line) => {
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff --git') || line.startsWith('index ')) {
+      return `<div class="diff-line diff-meta"><span class="diff-sign"> </span><span class="diff-text">${esc(line)}</span></div>`;
+    }
+    if (line.startsWith('+')) {
+      adds++;
+      return `<div class="diff-line diff-add"><span class="diff-sign">+</span><span class="diff-text">${esc(line.slice(1))}</span></div>`;
+    }
+    if (line.startsWith('-')) {
+      dels++;
+      return `<div class="diff-line diff-del"><span class="diff-sign">-</span><span class="diff-text">${esc(line.slice(1))}</span></div>`;
+    }
+    if (line.startsWith('@@')) {
+      return `<div class="diff-line diff-hunk"><span class="diff-sign"> </span><span class="diff-text">${esc(line)}</span></div>`;
+    }
+    const cleanL = line.startsWith(' ') ? line.slice(1) : line;
+    return `<div class="diff-line diff-ctx"><span class="diff-sign"> </span><span class="diff-text">${esc(cleanL)}</span></div>`;
+  });
+  return { html: htmlLines.join(''), adds, dels };
+}
+
 function enhanceMarkdown(root, final) {
   $$('a', root).forEach((a) => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
   $$('table', root).forEach((t) => {
@@ -1015,6 +1147,30 @@ function enhanceMarkdown(root, final) {
   $$('pre', root).forEach((pre) => {
     const code = $('code', pre);
     const lang = (((code && code.className.match(/language-([\w+-]+)/)) || [])[1]) || '';
+    const rawText = code ? code.textContent : pre.textContent;
+    const isDiff = lang === 'diff' || lang === 'patch' || (rawText && (rawText.includes('\n@@ ') || (rawText.includes('\n+') && rawText.includes('\n-'))));
+
+    if (isDiff) {
+      const { html, adds, dels } = formatDiffCode(rawText);
+      const wrap = document.createElement('div');
+      wrap.className = 'codeblock is-diff';
+      const statsBadge = (adds > 0 || dels > 0)
+        ? `<span class="diff-stats"><span class="diff-badge-add">+${adds}</span> <span class="diff-badge-del">-${dels}</span></span>`
+        : '';
+      wrap.innerHTML = `
+        <div class="codeblock-head">
+          <div class="diff-head-left">
+            <span>${esc(lang || 'diff')}</span>
+            ${statsBadge}
+          </div>
+          <button class="act" data-copy-code aria-label="Copy code">${icon('i-copy')}Copy</button>
+        </div>
+        <pre><code class="diff-content">${html}</code></pre>
+      `;
+      pre.replaceWith(wrap);
+      return;
+    }
+
     if (final && window.hljs && code) {
       try {
         if (lang && hljs.getLanguage(lang)) { code.innerHTML = hljs.highlight(code.textContent, { language: lang, ignoreIllegals: true }).value; code.classList.add('hljs'); }
@@ -1359,6 +1515,7 @@ async function drive(el, agentKey, open, { newTitle = '' } = {}) {
   if (!stopped && !failed) {
     notifyTaskComplete({ agent: agentKey, content: el._raw, sessionId: state.sessionId });
   }
+  checkGitChanges();
 
   if (newTitle && state.sessionId) { state.title = newTitle; updateTitle(); }
   loadSessions(true);
@@ -2673,6 +2830,8 @@ const actions = {
   'new-chat': newChat,
   'open-agents': openAgentSheet,
   'open-workspaces': () => openWorkspaceSheet(state.workspace || '/root'),
+  'open-git-changes': () => openGitChangesSheet(),
+  'view-file-diff': (el) => openGitChangesSheet(el.dataset.file),
   'open-qr': openQrSheet,
   'open-attach': openAttachSheet,
   'pick-camera': () => { closeSheet(); $('#cameraInput')?.click(); },
@@ -2985,7 +3144,9 @@ async function boot() {
 
   loadModels();
   await Promise.all([loadWorkspaces(), loadSessions(true), checkTunnel()]);
+  checkGitChanges();
   setInterval(checkTunnel, 30000);
+  setInterval(checkGitChanges, 10000);
   checkForUpdate();
   setInterval(checkForUpdate, 45000);
   setInterval(() => { if (!document.hidden && (state.running.size || state.tab === 'history')) loadSessions(true); }, 5000);

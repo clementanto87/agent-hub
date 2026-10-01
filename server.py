@@ -206,6 +206,76 @@ async def get_workspaces():
     valid = [w for w in candidates if os.path.isdir(w["path"])]
     return valid
 
+@app.get("/api/git/changes")
+async def git_changes(workspace: str = None):
+    """Returns uncommitted git status and changed files with line additions/deletions."""
+    ws = workspace if workspace and os.path.isdir(workspace) else "/root/Documents/antigravity/clever-einstein"
+    try:
+        chk = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=ws, capture_output=True, text=True)
+        if chk.returncode != 0:
+            return {"is_git": False, "files": [], "total_adds": 0, "total_dels": 0, "summary": "Not a git repository"}
+
+        st = subprocess.run(["git", "status", "--porcelain"], cwd=ws, capture_output=True, text=True, timeout=5)
+        diff_st = subprocess.run(["git", "diff", "--numstat", "HEAD"], cwd=ws, capture_output=True, text=True, timeout=5)
+        
+        numstats = {}
+        if diff_st.returncode == 0:
+            for line in diff_st.stdout.strip().splitlines():
+                parts = line.split("\t")
+                if len(parts) >= 3:
+                    adds = int(parts[0]) if parts[0].isdigit() else 0
+                    dels = int(parts[1]) if parts[1].isdigit() else 0
+                    numstats[parts[2]] = (adds, dels)
+
+        files = []
+        total_adds = 0
+        total_dels = 0
+
+        for line in st.stdout.strip().splitlines():
+            if not line:
+                continue
+            code = line[:2].strip()
+            file_path = line[3:].strip()
+            adds, dels = numstats.get(file_path, (0, 0))
+            total_adds += adds
+            total_dels += dels
+            files.append({
+                "path": file_path,
+                "status": code,
+                "adds": adds,
+                "dels": dels,
+                "name": os.path.basename(file_path)
+            })
+
+        return {
+            "is_git": True,
+            "workspace": ws,
+            "files": files,
+            "total_adds": total_adds,
+            "total_dels": total_dels,
+            "summary": f"{len(files)} files changed (+{total_adds} -{total_dels})" if files else "Working tree clean"
+        }
+    except Exception as e:
+        return {"is_git": False, "error": str(e), "files": []}
+
+@app.get("/api/git/diff")
+async def git_diff(workspace: str = None, file: str = None):
+    """Returns unified git diff with additions and deletions."""
+    ws = workspace if workspace and os.path.isdir(workspace) else "/root/Documents/antigravity/clever-einstein"
+    try:
+        cmd = ["git", "diff", "HEAD"]
+        if file:
+            cmd += ["--", file]
+        res = subprocess.run(cmd, cwd=ws, capture_output=True, text=True, timeout=5)
+        return {
+            "diff": res.stdout,
+            "file": file,
+            "workspace": ws,
+            "empty": not bool(res.stdout.strip())
+        }
+    except Exception as e:
+        return {"error": str(e), "diff": ""}
+
 def format_file_size(size_bytes: int) -> str:
     if size_bytes < 1024:
         return f"{size_bytes} B"
