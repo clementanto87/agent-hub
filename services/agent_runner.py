@@ -381,18 +381,36 @@ async def _pump_muse_json(proc) -> AsyncGenerator[str, None]:
                         has_yielded = True
                 elif ev_type in ["error", "fatal"]:
                     err_msg = event.get("message") or "Meta Muse encountered an error"
-                    yield f"\n⚠️ *Error:* {err_msg}\n\n"
+                    if "402" in err_msg or "Billing" in err_msg or "billing_error" in err_msg:
+                        yield f"\n> 💳 **Meta Muse Billing Required**\n> Meta API returned `402 billing_error`: *Billing verification failed. Please check your payment method.*\n>\n> To activate Meta Muse:\n> 1. Visit [https://dev.meta.ai](https://dev.meta.ai) and add a payment method or credits.\n> 2. Alternatively, set a valid `META_API_KEY`.\n\n"
+                    else:
+                        yield f"\n⚠️ *Error:* {err_msg}\n\n"
                     has_yielded = True
             except json.JSONDecodeError:
-                if line.startswith(("Error:", "Fatal:", "Exception:")):
+                if "402" in line or "Billing verification failed" in line or "billing_error" in line:
+                    yield f"\n> 💳 **Meta Muse Billing Required**\n> Meta API returned `402 billing_error`: *Billing verification failed. Please check your payment method.*\n>\n> To activate Meta Muse:\n> 1. Visit [https://dev.meta.ai](https://dev.meta.ai) and add a payment method or credits.\n> 2. Alternatively, set a valid `META_API_KEY`.\n\n"
+                    has_yielded = True
+                elif line.startswith(("Error:", "Fatal:", "Exception:", "run ended with Failed:")):
                     yield f"\n⚠️ *{line}*\n\n"
                     has_yielded = True
-                elif not line.startswith(("{", "[")):
+                elif not line.startswith(("muse:", "{", "[")):
                     yield line + "\n"
                     has_yielded = True
         await proc.wait()
         if proc.returncode != 0 and not has_yielded:
-            yield f"\n⚠️ *(Meta Muse process exited with code {proc.returncode})*\n"
+            err_text = ""
+            if proc.stderr:
+                try:
+                    stderr_bytes = await proc.stderr.read()
+                    err_text = stderr_bytes.decode("utf-8", errors="ignore").strip()
+                except Exception:
+                    pass
+            if "402" in err_text or "Billing" in err_text or "billing_error" in err_text:
+                yield f"\n> 💳 **Meta Muse Billing Required**\n> Meta API returned `402 billing_error`: *Billing verification failed. Please check your payment method.*\n>\n> To activate Meta Muse:\n> 1. Visit [https://dev.meta.ai](https://dev.meta.ai) and add a payment method or credits.\n> 2. Alternatively, set a valid `META_API_KEY`.\n\n"
+            elif err_text:
+                yield f"\n⚠️ *(Meta Muse error: {err_text[:300]})*\n"
+            else:
+                yield f"\n⚠️ *(Meta Muse process exited with code {proc.returncode})*\n"
     finally:
         if proc.returncode is None:
             _signal_group(proc, signal.SIGTERM)
@@ -593,7 +611,7 @@ async def stream_agent(agent_name: str, prompt: str, workspace: str = None, mode
             cwd=cwd,
             env=env,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
+            stderr=asyncio.subprocess.PIPE,
             limit=100 * 1024 * 1024,
             start_new_session=True
         )
