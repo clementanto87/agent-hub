@@ -203,24 +203,30 @@ function flashPageTitle(msg) {
 }
 
 async function notifyTaskComplete({ agent = 'Agent', content = '', sessionId = null } = {}) {
-  // 1. Play pleasant audio chime
+  const isBackground = document.hidden || (typeof document.hasFocus === 'function' && !document.hasFocus());
+
+  // 1. Soft audio chime (if sound preference enabled)
   playCompletionChime();
 
   // 2. Mobile haptic feedback
   haptic([35, 50, 35]);
 
-  // 3. Tab title flash if page is backgrounded
-  if (document.hidden) {
+  // 3. Tab title flash if page is backgrounded / away
+  if (isBackground) {
     flashPageTitle(`${AGENTS[agent]?.name || 'Agent'} finished!`);
   }
 
-  // 4. In-App Toast if user is currently browsing another tab
-  if (state.tab !== 'chat') {
+  // 4. In-App Toast if user is inside the app but on another view (e.g. settings, files, history)
+  if (!isBackground && state.tab !== 'chat') {
     const aName = AGENTS[agent]?.name || 'Agent';
     toast(`${aName}: Task completed!`, 'ok');
   }
 
-  // 5. System / Browser / PWA Notification
+  // 5. System / Browser / PWA Notification: ONLY when user has moved out of the app
+  if (!isBackground) {
+    return; // User is actively viewing the app, suppress OS popup notification
+  }
+
   if (state.prefs.notifications === false || !('Notification' in window)) return;
   if (Notification.permission !== 'granted') return;
 
