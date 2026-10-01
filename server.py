@@ -182,8 +182,8 @@ async def system_stats():
     return get_system_stats()
 
 @app.get("/api/usage")
-async def usage_stats(five_hour_budget: int = 200000, weekly_budget: int = 1500000):
-    return get_usage_metrics(five_hour_budget=five_hour_budget, weekly_budget=weekly_budget)
+async def usage_stats(five_hour_budget: int = 200000, weekly_budget: int = 1500000, agent: str = None):
+    return get_usage_metrics(five_hour_budget=five_hour_budget, weekly_budget=weekly_budget, agent=agent)
 
 @app.post("/api/process/kill")
 async def kill_proc(request: Request):

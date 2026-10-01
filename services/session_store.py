@@ -131,10 +131,11 @@ def delete_session(session_id: str):
     conn.commit()
     conn.close()
 
-def get_usage_metrics(five_hour_budget: int = 200000, weekly_budget: int = 1500000) -> dict:
+def get_usage_metrics(five_hour_budget: int = 200000, weekly_budget: int = 1500000, agent: str = None) -> dict:
     """
     Computes rolling 5-hour, 24-hour, and 7-day usage statistics, remaining quota,
     estimated window reset countdowns, and per-agent token breakdowns.
+    Optionally filters by a specific agent (e.g. 'claude', 'antigravity', 'codex', 'muse').
     """
     init_db()
     now = time.time()
@@ -145,11 +146,19 @@ def get_usage_metrics(five_hour_budget: int = 200000, weekly_budget: int = 15000
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
+    agent_filter = agent.lower().strip() if agent and agent.lower().strip() != "all" else None
+
     # 1. Rolling 5-Hour Window
-    cursor.execute(
-        "SELECT count(*), coalesce(sum(tokens), 0), min(timestamp) FROM messages WHERE timestamp >= ?",
-        (five_h_ago,)
-    )
+    if agent_filter:
+        cursor.execute(
+            "SELECT count(*), coalesce(sum(tokens), 0), min(timestamp) FROM messages WHERE timestamp >= ? AND agent = ?",
+            (five_h_ago, agent_filter)
+        )
+    else:
+        cursor.execute(
+            "SELECT count(*), coalesce(sum(tokens), 0), min(timestamp) FROM messages WHERE timestamp >= ?",
+            (five_h_ago,)
+        )
     r5 = cursor.fetchone()
     msgs_5h = r5[0] or 0
     tokens_5h = r5[1] or 0
@@ -175,19 +184,31 @@ def get_usage_metrics(five_hour_budget: int = 200000, weekly_budget: int = 15000
     agent_5h = {row[0]: {"messages": row[1], "tokens": row[2]} for row in cursor.fetchall()}
 
     # 2. Rolling 24-Hour Window
-    cursor.execute(
-        "SELECT count(*), coalesce(sum(tokens), 0) FROM messages WHERE timestamp >= ?",
-        (one_d_ago,)
-    )
+    if agent_filter:
+        cursor.execute(
+            "SELECT count(*), coalesce(sum(tokens), 0) FROM messages WHERE timestamp >= ? AND agent = ?",
+            (one_d_ago, agent_filter)
+        )
+    else:
+        cursor.execute(
+            "SELECT count(*), coalesce(sum(tokens), 0) FROM messages WHERE timestamp >= ?",
+            (one_d_ago,)
+        )
     r24 = cursor.fetchone()
     msgs_24h = r24[0] or 0
     tokens_24h = r24[1] or 0
 
     # 3. Rolling 7-Day Window
-    cursor.execute(
-        "SELECT count(*), coalesce(sum(tokens), 0) FROM messages WHERE timestamp >= ?",
-        (seven_d_ago,)
-    )
+    if agent_filter:
+        cursor.execute(
+            "SELECT count(*), coalesce(sum(tokens), 0) FROM messages WHERE timestamp >= ? AND agent = ?",
+            (seven_d_ago, agent_filter)
+        )
+    else:
+        cursor.execute(
+            "SELECT count(*), coalesce(sum(tokens), 0) FROM messages WHERE timestamp >= ?",
+            (seven_d_ago,)
+        )
     r7d = cursor.fetchone()
     msgs_7d = r7d[0] or 0
     tokens_7d = r7d[1] or 0
@@ -200,10 +221,16 @@ def get_usage_metrics(five_hour_budget: int = 200000, weekly_budget: int = 15000
     agent_7d = {row[0]: {"messages": row[1], "tokens": row[2]} for row in cursor.fetchall()}
 
     # 7d daily series
-    cursor.execute(
-        "SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch'), count(*), coalesce(sum(tokens), 0) FROM messages WHERE timestamp >= ? GROUP BY strftime('%Y-%m-%d', timestamp, 'unixepoch') ORDER BY 1 ASC",
-        (seven_d_ago,)
-    )
+    if agent_filter:
+        cursor.execute(
+            "SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch'), count(*), coalesce(sum(tokens), 0) FROM messages WHERE timestamp >= ? AND agent = ? GROUP BY strftime('%Y-%m-%d', timestamp, 'unixepoch') ORDER BY 1 ASC",
+            (seven_d_ago, agent_filter)
+        )
+    else:
+        cursor.execute(
+            "SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch'), count(*), coalesce(sum(tokens), 0) FROM messages WHERE timestamp >= ? GROUP BY strftime('%Y-%m-%d', timestamp, 'unixepoch') ORDER BY 1 ASC",
+            (seven_d_ago,)
+        )
     db_daily = {row[0]: {"messages": row[1], "tokens": row[2]} for row in cursor.fetchall()}
 
     # Fill full 7 calendar days
@@ -221,7 +248,10 @@ def get_usage_metrics(five_hour_budget: int = 200000, weekly_budget: int = 15000
         })
 
     # 4. Lifetime Totals
-    cursor.execute("SELECT count(*), coalesce(sum(tokens), 0) FROM messages")
+    if agent_filter:
+        cursor.execute("SELECT count(*), coalesce(sum(tokens), 0) FROM messages WHERE agent = ?", (agent_filter,))
+    else:
+        cursor.execute("SELECT count(*), coalesce(sum(tokens), 0) FROM messages")
     rtot = cursor.fetchone()
     cursor.execute("SELECT count(*) FROM sessions")
     rsess = cursor.fetchone()
@@ -238,6 +268,7 @@ def get_usage_metrics(five_hour_budget: int = 200000, weekly_budget: int = 15000
     pct_7d = round((tokens_7d / weekly_budget) * 100, 1) if weekly_budget > 0 else 0.0
 
     return {
+        "agent": agent_filter or "all",
         "window_5h": {
             "tokens_used": tokens_5h,
             "tokens_budget": five_hour_budget,

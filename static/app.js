@@ -2098,12 +2098,25 @@ async function pollUsage() {
   try {
     const b5h = state.prefs.fiveHourBudget || 200000;
     const bwk = state.prefs.weeklyBudget || 1500000;
-    const u = await api(`/api/usage?five_hour_budget=${encodeURIComponent(b5h)}&weekly_budget=${encodeURIComponent(bwk)}`);
+    const curAgent = state.usageAgent || 'all';
+    const u = await api(`/api/usage?five_hour_budget=${encodeURIComponent(b5h)}&weekly_budget=${encodeURIComponent(bwk)}&agent=${encodeURIComponent(curAgent)}`);
     if (!u) return;
 
     const w5 = u.window_5h;
     const w7 = u.window_7d;
     const w24 = u.window_24h;
+
+    // Dynamic badge labels
+    const badge5Label = curAgent === 'claude' ? 'Claude 5-Hour Limit' :
+      (curAgent === 'antigravity' ? 'Antigravity 5h Window' :
+      (curAgent === 'codex' ? 'Codex 5h Window' :
+      (curAgent === 'muse' ? 'Meta Muse 5h Window' : '5-Hour Rolling Window')));
+    const badge5El = $('.usage-badge.rolling');
+    if (badge5El) badge5El.textContent = badge5Label;
+
+    const badge7Label = curAgent === 'all' ? 'Weekly Quota (7 Days)' : `${AGENTS[curAgent]?.name || curAgent} Weekly Quota (7 Days)`;
+    const badge7El = $('.usage-badge.weekly');
+    if (badge7El) badge7El.textContent = badge7Label;
 
     // 1. Render 5-Hour Rolling Card
     const u5hUsedEl = $('#u5hUsed');
@@ -2877,6 +2890,15 @@ threadEl().addEventListener('scroll', onThreadScroll, { passive: true });
 $('#historySearch')?.addEventListener('input', renderHistory);
 $('#skillsSearch')?.addEventListener('input', renderSkills);
 $('#mcpSearch')?.addEventListener('input', renderMcp);
+
+$('#usageAgentToggle')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-usage-agent]');
+  if (!btn) return;
+  const agent = btn.dataset.usageAgent || 'all';
+  state.usageAgent = agent;
+  $$('#usageAgentToggle button').forEach(b => b.setAttribute('aria-checked', String(b === btn)));
+  pollUsage();
+});
 
 $('#pref5hBudget')?.addEventListener('change', (e) => {
   const val = Math.max(1000, parseInt(e.target.value) || 200000);
