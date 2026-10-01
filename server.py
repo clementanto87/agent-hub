@@ -220,28 +220,39 @@ async def git_changes(workspace: str = None):
         
         numstats = {}
         if diff_st.returncode == 0:
-            for line in diff_st.stdout.strip().splitlines():
+            for line in diff_st.stdout.splitlines():
                 parts = line.split("\t")
                 if len(parts) >= 3:
                     adds = int(parts[0]) if parts[0].isdigit() else 0
                     dels = int(parts[1]) if parts[1].isdigit() else 0
-                    numstats[parts[2]] = (adds, dels)
+                    numstats[parts[2].strip().strip('"')] = (adds, dels)
 
         files = []
         total_adds = 0
         total_dels = 0
 
-        for line in st.stdout.strip().splitlines():
-            if not line:
+        for raw_line in st.stdout.splitlines():
+            if not raw_line or len(raw_line) < 4:
                 continue
-            code = line[:2].strip()
-            file_path = line[3:].strip()
+            code = raw_line[:2].strip()
+            file_path = raw_line[3:].strip().strip('"')
             adds, dels = numstats.get(file_path, (0, 0))
+
+            # If untracked file, count lines as additions
+            if code == "??" or (adds == 0 and dels == 0 and code in ["A", "??"]):
+                full_p = os.path.join(ws, file_path)
+                if os.path.isfile(full_p):
+                    try:
+                        with open(full_p, "r", encoding="utf-8", errors="ignore") as f:
+                            adds = sum(1 for _ in f)
+                    except Exception:
+                        adds = 1
+
             total_adds += adds
             total_dels += dels
             files.append({
                 "path": file_path,
-                "status": code,
+                "status": code or "M",
                 "adds": adds,
                 "dels": dels,
                 "name": os.path.basename(file_path)
@@ -263,15 +274,45 @@ async def git_diff(workspace: str = None, file: str = None):
     """Returns unified git diff with additions and deletions."""
     ws = workspace if workspace and os.path.isdir(workspace) else "/root/Documents/antigravity/clever-einstein"
     try:
+        diff_text = ""
+        # 1. Try git diff HEAD
         cmd = ["git", "diff", "HEAD"]
         if file:
             cmd += ["--", file]
         res = subprocess.run(cmd, cwd=ws, capture_output=True, text=True, timeout=5)
+        diff_text = res.stdout or ""
+
+        # 2. If empty, try unstaged diff
+        if not diff_text.strip() and file:
+            res_unstaged = subprocess.run(["git", "diff", "--", file], cwd=ws, capture_output=True, text=True, timeout=5)
+            diff_text = res_unstaged.stdout or ""
+
+        # 3. If empty, try staged diff
+        if not diff_text.strip() and file:
+            res_staged = subprocess.run(["git", "diff", "--cached", "--", file], cwd=ws, capture_output=True, text=True, timeout=5)
+            diff_text = res_staged.stdout or ""
+
+        # 4. If still empty (e.g. untracked new file), try --no-index against /dev/null
+        if not diff_text.strip() and file:
+            res_new = subprocess.run(["git", "diff", "--no-index", "/dev/null", file], cwd=ws, capture_output=True, text=True, timeout=5)
+            diff_text = res_new.stdout or ""
+
+        # 5. If still empty and file exists on disk, construct addition diff manually
+        if not diff_text.strip() and file:
+            full_p = os.path.join(ws, file) if not os.path.isabs(file) else file
+            if os.path.isfile(full_p):
+                try:
+                    with open(full_p, "r", encoding="utf-8", errors="ignore") as f:
+                        content_lines = f.readlines()
+                    diff_text = f"diff --git a/{file} b/{file}\nnew file\n--- /dev/null\n+++ b/{file}\n@@ -0,0 +1,{len(content_lines)} @@\n" + "".join(f"+{l}" if not l.endswith("\n") else f"+{l}" for l in content_lines)
+                except Exception:
+                    pass
+
         return {
-            "diff": res.stdout,
+            "diff": diff_text,
             "file": file,
             "workspace": ws,
-            "empty": not bool(res.stdout.strip())
+            "empty": not bool(diff_text.strip())
         }
     except Exception as e:
         return {"error": str(e), "diff": ""}
