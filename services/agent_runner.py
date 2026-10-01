@@ -332,6 +332,76 @@ async def _pump_codex_json(proc) -> AsyncGenerator[str, None]:
                 _signal_group(proc, signal.SIGKILL)
                 await proc.wait()
 
+async def _pump_muse_json(proc) -> AsyncGenerator[str, None]:
+    """
+    Parses Meta Muse JSONL event stream, emits tool activity, and streams assistant text deltas.
+    """
+    has_yielded = False
+    yield _format_activity("🔷", "Meta Muse", "Initializing…", True)
+    try:
+        async for raw_line in _safe_read_lines(proc.stdout):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+                ev_type = event.get("type") or event.get("event")
+
+                if ev_type in ["item.started", "tool_call", "step_started"]:
+                    item = event.get("item", {}) or event
+                    itype = item.get("type", "")
+                    if "command" in itype or "exec" in itype or "bash" in itype:
+                        yield _format_activity("🔧", "Command", _short_cmd(item.get("command", "")), True)
+                    elif "edit" in itype or "write" in itype:
+                        yield _format_activity("✏️", "Editing", _short_path(item.get("path", "")), True)
+                    elif "read" in itype or "view" in itype:
+                        yield _format_activity("📖", "Reading", _short_path(item.get("path", "")), True)
+                    elif "mcp" in itype:
+                        yield _format_activity("🔌", "MCP", item.get("tool", ""), True)
+                    elif "skill" in itype:
+                        yield _format_activity("🧩", "Skill", item.get("name", ""), True)
+                    else:
+                        yield _format_activity("⚙️", "Tool", item.get("name", itype), True)
+                elif ev_type in ["delta", "agent_response", "text_delta"]:
+                    text = event.get("text") or event.get("delta") or ""
+                    if text:
+                        yield text
+                        has_yielded = True
+                elif ev_type in ["item.completed", "message"]:
+                    item = event.get("item", {}) or event
+                    text = item.get("text") or item.get("content") or ""
+                    if text and not has_yielded:
+                        yield text + "\n\n"
+                        has_yielded = True
+                elif ev_type in ["result", "turn.completed"]:
+                    res = event.get("result", {})
+                    resp = res.get("response") or res.get("text") or ""
+                    if resp and not has_yielded:
+                        yield resp + "\n\n"
+                        has_yielded = True
+                elif ev_type in ["error", "fatal"]:
+                    err_msg = event.get("message") or "Meta Muse encountered an error"
+                    yield f"\n⚠️ *Error:* {err_msg}\n\n"
+                    has_yielded = True
+            except json.JSONDecodeError:
+                if line.startswith(("Error:", "Fatal:", "Exception:")):
+                    yield f"\n⚠️ *{line}*\n\n"
+                    has_yielded = True
+                elif not line.startswith(("{", "[")):
+                    yield line + "\n"
+                    has_yielded = True
+        await proc.wait()
+        if proc.returncode != 0 and not has_yielded:
+            yield f"\n⚠️ *(Meta Muse process exited with code {proc.returncode})*\n"
+    finally:
+        if proc.returncode is None:
+            _signal_group(proc, signal.SIGTERM)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=3)
+            except asyncio.TimeoutError:
+                _signal_group(proc, signal.SIGKILL)
+                await proc.wait()
+
 def _signal_group(proc, sig) -> None:
     try:
         os.killpg(proc.pid, sig)
@@ -375,6 +445,8 @@ async def stream_agent(agent_name: str, prompt: str, workspace: str = None, mode
             agent = "claude"
         elif "codex" in p_lower:
             agent = "codex"
+        elif "muse" in p_lower:
+            agent = "muse"
         else:
             agent = "antigravity"
 
@@ -501,7 +573,36 @@ async def stream_agent(agent_name: str, prompt: str, workspace: str = None, mode
             yield chunk
         return
 
-    # 4. GOOGLE ANTIGRAVITY (Default)
+    # 4. META MUSE (Muse Code)
+    elif agent in ["muse", "meta-muse", "meta", "metamuse"]:
+        yield f"🔷 *[Meta Muse Agent · Full VM Permissions · {cwd}]*\n\n"
+        cmd = [
+            "/usr/local/bin/muse",
+            "exec",
+            "--yolo",
+            "--json",
+            "--workspace", cwd
+        ]
+        if model:
+            cmd += ["--model", model]
+        cmd.append(enriched_prompt)
+
+        env = os.environ.copy()
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=cwd,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            limit=100 * 1024 * 1024,
+            start_new_session=True
+        )
+
+        async for chunk in _pump_muse_json(proc):
+            yield chunk
+        return
+
+    # 5. GOOGLE ANTIGRAVITY (Default)
     else:
         yield f"🚀 *[Google Antigravity Agent · Full VM Permissions · {cwd}]*\n\n"
         

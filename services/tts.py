@@ -22,6 +22,7 @@ AGENT_VOICES = {
     "antigravity": os.environ.get("AGENTHUB_VOICE_ANTIGRAVITY", "en_GB-alan-medium"),
     "claude": os.environ.get("AGENTHUB_VOICE_CLAUDE", "en_US-lessac-medium"),
     "codex": os.environ.get("AGENTHUB_VOICE_CODEX", "en_US-amy-medium"),
+    "muse": os.environ.get("AGENTHUB_VOICE_MUSE", "en_US-bryce-medium"),
 }
 _ALLOWED = set(AGENT_VOICES.values()) | {DEFAULT_VOICE}
 
