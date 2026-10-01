@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>AgentHub</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#000000">
+  <meta name="color-scheme" content="dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="AgentHub">
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+  <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
+
+  <link rel="stylesheet" href="/static/styles.css?v=__BUILD__">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+</head>
+<body>
+
+<!-- ───────────── Icon sprite ───────────── -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <defs>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.6A8 8 0 1 1 21 12Z"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7.5 9.5 3 2.5-3 2.5M13 15h4"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6.5L14 18l2.5-6H21"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2.5" class="fill"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h3.2l2 2.3H18A2.5 2.5 0 0 1 20.5 9.8v7.7A2.5 2.5 0 0 1 18 20H6a2.5 2.5 0 0 1-2.5-2.5Z"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V6A2.5 2.5 0 0 0 13 3.5H6A2.5 2.5 0 0 0 3.5 6v7A2.5 2.5 0 0 0 6 15.5h2.5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14-4.5L4 9M4 4v5h5M4 13a8 8 0 0 0 14 4.5L20 15M20 20v-5h-5"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 1.8h6a2 2 0 0 0 2-1.8l1-12M9 7V4.5h6V7"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></symbol>
+    <symbol id="i-qr" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1.2"/><rect x="14" y="4" width="6" height="6" rx="1.2"/><rect x="4" y="14" width="6" height="6" rx="1.2"/><path d="M14 14h2.5v2.5M20 14v.01M14 20h.01M17 20h3v-3"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.6 3.8 5.6 3.8 9s-1.2 6.4-3.8 9c-2.6-2.6-3.8-5.6-3.8-9S9.400 5.600 12 3Z"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="9.5" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-wave" viewBox="0 0 24 24"><path d="M4 10v4M8 6.500v11M12 3.500v17M16 7.500v9M20 10v4"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M4.500 9.500h3L12 6v12l-4.500-3.500h-3ZM15.500 9a4 4 0 0 1 0 6M18 6.500a7.500 7.500 0 0 1 0 11"/></symbol>
+    <symbol id="i-volume-off" viewBox="0 0 24 24"><path d="M4.500 9.500h3L12 6v12l-4.500-3.500h-3ZM16 9.500l5 5M21 9.500l-5 5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4Z"/><path d="M12 10v4.5M12 17.4v.01"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5"/><path d="M9 2.5V6M15 2.5V6M9 18v3.500M15 18v3.500M2.500 9H6M2.500 15H6M18 9h3.500M18 15h3.500"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3.500c.6 4.800 2.700 6.900 7.500 7.500-4.800.6-6.900 2.700-7.500 7.500-.6-4.800-2.700-6.900-7.500-7.500 4.800-.6 6.900-2.700 7.500-7.500Z"/></symbol>
+    <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6.500" cy="6" r="2"/><circle cx="6.500" cy="18" r="2"/><circle cx="17.500" cy="9" r="2"/><path d="M6.500 8v8M17.500 11c0 3.500-4 3.500-9 5"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><path d="M12 3 4 7.500v9L12 21l8-4.500v-9Z"/><path d="m4 7.500 8 4.500 8-4.500M12 12v9"/></symbol>
+    <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+    <symbol id="i-zap" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" class="fill"/></symbol>
+
+    <!-- Agent glyphs -->
+    <symbol id="a-antigravity" viewBox="0 0 24 24"><path d="M12 3.500c4.500 3 6.500 6.500 6.500 10.500L15 16.500H9L5.500 14c0-4 2-7.500 6.500-10.500Z"/><circle cx="12" cy="10.500" r="1.800"/><path d="M9 16.500 7.500 20.500M15 16.500l1.500 4M12 17v3.500"/></symbol>
+    <symbol id="a-claude" viewBox="0 0 24 24"><path d="M12 3v18M3.800 7.500l16.400 9M3.800 16.500l16.400-9"/></symbol>
+    <symbol id="a-codex" viewBox="0 0 24 24"><path d="M12 3 20 7.500v9L12 21l-8-4.500v-9Z"/><path d="m9.500 10.500-2 1.500 2 1.500M14.500 10.500l2 1.500-2 1.500"/></symbol>
+    <symbol id="a-bash" viewBox="0 0 24 24"><path d="m5 8 4 4-4 4M12 17h7"/></symbol>
+    <symbol id="a-auto" viewBox="0 0 24 24"><path d="M4 7h3.500c2.500 0 3.500 1.500 5 5s2.500 5 5 5H20M4 17h3.500c1 0 1.800-.4 2.500-1.100M13 8.100c.7-.7 1.500-1.100 2.500-1.100H20M17.500 4.500 20 7l-2.500 2.500M17.500 14.500 20 17l-2.500 2.500"/></symbol>
+  </defs>
+</svg>
+
+<div id="app">
+
+  <!-- ───────────── Sidebar / Side Navigation ───────────── -->
+  <aside class="rail" id="rail" aria-label="Navigation">
+    <div class="rail-top">
+      <div class="brand">
+        <div class="brand-info">
+          <div class="brand-mark"><svg class="i"><use href="#i-sparkle"/></svg></div>
+          <span class="brand-name">AgentHub</span>
+        </div>
+        <button class="icon-btn only-mobile rail-close" data-action="close-nav" aria-label="Close navigation"><svg class="i"><use href="#i-x"/></svg></button>
+      </div>
+      <button class="btn btn-primary btn-block" data-action="new-chat">
+        <svg class="i"><use href="#i-plus"/></svg> New chat
+      </button>
+    </div>
+
+    <nav class="rail-nav" aria-label="Sections">
+      <button class="nav-link" data-tab="chat"><svg class="i"><use href="#i-chat"/></svg>Chat</button>
+      <button class="nav-link" data-tab="skills"><svg class="i"><use href="#i-sparkle"/></svg>Skills & MCP</button>
+      <button class="nav-link" data-tab="terminal"><svg class="i"><use href="#i-terminal"/></svg>Terminal</button>
+      <button class="nav-link" data-tab="monitor"><svg class="i"><use href="#i-pulse"/></svg>Monitor</button>
+      <button class="nav-link" data-tab="history"><svg class="i"><use href="#i-clock"/></svg>History</button>
+      <button class="nav-link" data-tab="settings"><svg class="i"><use href="#i-sliders"/></svg>Settings</button>
+    </nav>
+
+    <div class="rail-section-title">Recent</div>
+    <div class="rail-recent" id="railRecent"></div>
+
+    <div class="rail-foot">
+      <span class="conn-dot" id="connDot"></span>
+      <span id="connText">Connecting…</span>
+    </div>
+  </aside>
+  <div class="rail-backdrop" id="railBackdrop" data-action="close-nav" hidden></div>
+
+  <!-- ───────────── Main column ───────────── -->
+  <div class="main">
+
+    <header class="topbar">
+      <div class="topbar-title">
+        <button class="icon-btn only-mobile nav-toggle" data-action="toggle-nav" aria-label="Open navigation"><svg class="i"><use href="#i-menu"/></svg></button>
+        <div class="brand-mark sm only-mobile" data-action="toggle-nav" role="button" tabindex="0" aria-label="Open navigation"><svg class="i"><use href="#i-sparkle"/></svg></div>
+        <h1 id="viewTitle">New chat</h1>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-btn" data-action="open-qr" aria-label="Open on phone"><svg class="i"><use href="#i-qr"/></svg></button>
+        <button class="icon-btn only-mobile" data-action="new-chat" aria-label="New chat"><svg class="i"><use href="#i-plus"/></svg></button>
+      </div>
+    </header>
+
+    <div class="banner" id="httpsBanner" hidden>
+      <svg class="i"><use href="#i-mic"/></svg>
+      <span>Voice input needs HTTPS on this device.</span>
+      <a id="httpsLink" href="#" class="banner-link">Open secure link</a>
+    </div>
+
+    <main class="views">
+
+      <!-- CHAT -->
+      <section class="view active" id="view-chat" aria-label="Chat">
+        <div class="thread-wrap">
+          <div class="thread" id="thread" role="log" aria-live="polite"></div>
+          <button class="jump-btn" id="jumpBtn" data-action="jump-bottom" aria-label="Jump to latest" hidden>
+            <svg class="i"><use href="#i-arrow-down"/></svg>
+          </button>
+        </div>
+
+        <div class="composer-dock">
+          <div class="composer" id="composer">
+            <div class="rec-bar" id="recBar" hidden>
+              <span class="rec-pulse"></span>
+              <span class="rec-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+              <span class="rec-time" id="recTime">0:00</span>
+              <span class="rec-label" id="recLabel">Listening…</span>
+              <button class="btn btn-ghost btn-sm" data-action="mic-cancel">Cancel</button>
+              <button class="btn btn-primary btn-sm" data-action="mic-stop">Done</button>
+            </div>
+            <div class="attachment-tray" id="attachmentTray" hidden></div>
+            <textarea id="promptInput" class="composer-input" rows="1" enterkeyhint="send"
+              placeholder="Message an agent…" aria-label="Message"></textarea>
+            <div class="composer-bar">
+              <button class="chip-btn" id="agentChip" data-action="open-agents" aria-label="Choose agent">
+                <span class="dot" id="agentChipDot"></span>
+                <span id="agentChipLabel">Antigravity</span>
+                <svg class="i xs"><use href="#i-chevron-down"/></svg>
+              </button>
+              <button class="chip-btn" id="wsChip" data-action="open-workspaces" aria-label="Choose workspace">
+                <svg class="i xs"><use href="#i-folder"/></svg>
+                <span id="wsChipLabel">workspace</span>
+              </button>
+              <span class="spacer"></span>
+              <button class="round-btn" id="attachBtn" data-action="open-attach" aria-label="Attach media"><svg class="i"><use href="#i-paperclip"/></svg></button>
+              <input type="file" id="mediaFileInput" multiple style="display:none" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt,.md,.csv,.json,.py,.zip,*">
+              <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none">
+              <button class="round-btn" data-action="voice-open" aria-label="Voice conversation"><svg class="i"><use href="#i-wave"/></svg></button>
+              <button class="round-btn" id="micBtn" data-action="mic" aria-label="Voice input"><svg class="i"><use href="#i-mic"/></svg></button>
+              <button class="round-btn send" id="sendBtn" data-action="send" aria-label="Send"><svg class="i"><use href="#i-send"/></svg></button>
+            </div>
+          </div>
+          <div class="composer-hint" id="composerHint"></div>
+        </div>
+      </section>
+
+      <!-- SKILLS & MCP -->
+      <section class="view scroll" id="view-skills" aria-label="Skills & MCP">
+        <div class="page">
+          <div class="skills-segment-wrap">
+            <div class="segmented" id="skillsTabToggle" role="tablist">
+              <button class="active" data-action="switch-skills-panel" data-panel="skills" role="tab">🧩 Skills</button>
+              <button data-action="switch-skills-panel" data-panel="mcp" role="tab">🔌 MCP Servers</button>
+            </div>
+          </div>
+
+          <!-- SKILLS PANEL -->
+          <div id="panelSkills" class="skills-panel">
+            <div class="skills-actions-bar">
+              <div class="search" style="flex: 1; margin: 0;">
+                <svg class="i"><use href="#i-search"/></svg>
+                <input id="skillsSearch" type="search" placeholder="Search skills…" aria-label="Search skills" autocomplete="off">
+              </div>
+              <button class="btn btn-sm" data-action="open-skill-gen"><svg class="i xs"><use href="#i-sparkle"/></svg> AI Generate</button>
+              <button class="btn btn-primary btn-sm" data-action="open-skill-create"><svg class="i xs"><use href="#i-plus"/></svg> New Skill</button>
+            </div>
+            <div id="skillsList" class="stack"></div>
+          </div>
+
+          <!-- MCP PANEL -->
+          <div id="panelMcp" class="skills-panel" hidden>
+            <div class="skills-actions-bar">
+              <div class="search" style="flex: 1; margin: 0;">
+                <svg class="i"><use href="#i-search"/></svg>
+                <input id="mcpSearch" type="search" placeholder="Search MCP servers…" aria-label="Search MCP" autocomplete="off">
+              </div>
+              <button class="btn btn-sm" data-action="open-mcp-gen"><svg class="i xs"><use href="#i-sparkle"/></svg> AI Config</button>
+              <button class="btn btn-primary btn-sm" data-action="open-mcp-create"><svg class="i xs"><use href="#i-plus"/></svg> Add Server</button>
+            </div>
+            <div id="mcpList" class="stack"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TERMINAL -->
+      <section class="view" id="view-terminal" aria-label="Terminal">
+        <div class="term-shell">
+          <div class="term-head">
+            <div class="term-status"><span class="conn-dot" id="termDot"></span><span id="termStatus">Not connected</span></div>
+            <span class="spacer"></span>
+            <button class="btn btn-ghost btn-sm" data-action="term-font" data-delta="-1" aria-label="Smaller text">A−</button>
+            <button class="btn btn-ghost btn-sm" data-action="term-font" data-delta="1" aria-label="Larger text">A+</button>
+            <button class="btn btn-ghost btn-sm" data-action="term-reconnect"><svg class="i xs"><use href="#i-refresh"/></svg>Reconnect</button>
+          </div>
+          <div id="terminal-view"></div>
+          <div class="keybar" id="keybar">
+            <button class="key" data-key="esc">esc</button>
+            <button class="key" data-key="tab">tab</button>
+            <button class="key toggle" id="ctrlKey" data-key="ctrl">ctrl</button>
+            <button class="key" data-key="^C">^C</button>
+            <button class="key" data-key="^D">^D</button>
+            <button class="key" data-key="left">←</button>
+            <button class="key" data-key="up">↑</button>
+            <button class="key" data-key="down">↓</button>
+            <button class="key" data-key="right">→</button>
+            <button class="key" data-key="/">/</button>
+            <button class="key" data-key="-">-</button>
+            <button class="key" data-key="|">|</button>
+            <button class="key" data-key="~">~</button>
+            <button class="key wide" data-key="clear">clear</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- MONITOR -->
+      <section class="view scroll" id="view-monitor" aria-label="Monitor">
+        <div class="page">
+          <div class="page-head">
+            <h2>System</h2>
+            <span class="muted sm" id="monUptime">—</span>
+          </div>
+          <div class="gauge-grid">
+            <div class="card gauge" id="gCpu">
+              <svg class="ring" viewBox="0 0 44 44"><circle class="ring-bg" cx="22" cy="22" r="18"/><circle class="ring-fg" cx="22" cy="22" r="18" pathLength="100"/></svg>
+              <div class="gauge-body"><div class="gauge-val">–</div><div class="gauge-label">CPU</div></div>
+              <svg class="spark" viewBox="0 0 100 24" preserveAspectRatio="none"><polyline points=""/></svg>
+            </div>
+            <div class="card gauge" id="gMem">
+              <svg class="ring" viewBox="0 0 44 44"><circle class="ring-bg" cx="22" cy="22" r="18"/><circle class="ring-fg" cx="22" cy="22" r="18" pathLength="100"/></svg>
+              <div class="gauge-body"><div class="gauge-val">–</div><div class="gauge-label">Memory</div><div class="gauge-sub" id="gMemSub"></div></div>
+              <svg class="spark" viewBox="0 0 100 24" preserveAspectRatio="none"><polyline points=""/></svg>
+            </div>
+            <div class="card gauge" id="gDisk">
+              <svg class="ring" viewBox="0 0 44 44"><circle class="ring-bg" cx="22" cy="22" r="18"/><circle class="ring-fg" cx="22" cy="22" r="18" pathLength="100"/></svg>
+              <div class="gauge-body"><div class="gauge-val">–</div><div class="gauge-label">Disk</div><div class="gauge-sub" id="gDiskSub"></div></div>
+            </div>
+          </div>
+
+          <div class="page-head"><h2>Agent processes</h2><span class="muted sm" id="procCount"></span></div>
+          <div class="stack" id="processList"></div>
+        </div>
+      </section>
+
+      <!-- HISTORY -->
+      <section class="view scroll" id="view-history" aria-label="History">
+        <div class="page">
+          <div class="search">
+            <svg class="i"><use href="#i-search"/></svg>
+            <input id="historySearch" type="search" placeholder="Search conversations" aria-label="Search conversations" autocomplete="off">
+          </div>
+          <div id="sessionList" class="stack-lg"></div>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section class="view scroll" id="view-settings" aria-label="Settings">
+        <div class="page">
+          <div class="group-title">Defaults</div>
+          <div class="list">
+            <button class="row" data-action="open-agents">
+              <span class="row-icon"><svg class="i"><use href="#i-sparkle"/></svg></span>
+              <span class="row-main"><span class="row-title">Agent</span><span class="row-sub" id="setAgentSub"></span></span>
+              <svg class="i xs muted"><use href="#i-chevron"/></svg>
+            </button>
+            <button class="row" data-action="open-workspaces">
+              <span class="row-icon"><svg class="i"><use href="#i-folder"/></svg></span>
+              <span class="row-main"><span class="row-title">Workspace</span><span class="row-sub mono" id="setWsSub"></span></span>
+              <svg class="i xs muted"><use href="#i-chevron"/></svg>
+            </button>
+          </div>
+
+          <div class="group-title">Preferences</div>
+          <div class="list">
+            <label class="row">
+              <span class="row-main"><span class="row-title">Task complete notifications</span><span class="row-sub">System & PWA notification when agent finishes running</span></span>
+              <input type="checkbox" class="switch" id="prefNotifications">
+            </label>
+            <label class="row">
+              <span class="row-main"><span class="row-title">Completion chime</span><span class="row-sub">Play a soft audio chime when a task or command finishes</span></span>
+              <input type="checkbox" class="switch" id="prefSound">
+            </label>
+            <label class="row">
+              <span class="row-main"><span class="row-title">Enter sends message</span><span class="row-sub">When off, Enter adds a new line and you send with the button</span></span>
+              <input type="checkbox" class="switch" id="prefEnter">
+            </label>
+            <label class="row">
+              <span class="row-main"><span class="row-title">Haptic feedback</span><span class="row-sub">Subtle vibration on send and finish</span></span>
+              <input type="checkbox" class="switch" id="prefHaptics">
+            </label>
+            <div class="row">
+              <span class="row-main"><span class="row-title">Text size</span></span>
+              <div class="segmented" id="prefSize" role="radiogroup" aria-label="Text size">
+                <button data-size="sm" role="radio">S</button>
+                <button data-size="md" role="radio">M</button>
+                <button data-size="lg" role="radio">L</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="group-title">Connection</div>
+          <div class="list">
+            <div class="row">
+              <span class="row-icon"><svg class="i"><use href="#i-globe"/></svg></span>
+              <span class="row-main"><span class="row-title">This address</span><span class="row-sub mono" id="setOrigin"></span></span>
+              <button class="btn btn-ghost btn-sm" data-action="copy-origin">Copy</button>
+            </div>
+            <div class="row">
+              <span class="row-icon"><svg class="i"><use href="#i-lock"/></svg></span>
+              <span class="row-main"><span class="row-title">Secure tunnel</span><span class="row-sub mono" id="tunnelSub">Checking…</span></span>
+              <button class="btn btn-sm" id="tunnelBtn" data-action="tunnel-toggle">Start</button>
+            </div>
+            <div class="row">
+              <span class="row-icon"><svg class="i"><use href="#i-volume"/></svg></span>
+              <span class="row-main"><span class="row-title">Test spoken reply</span><span class="row-sub">Plays a sample the way voice mode does</span></span>
+              <button class="btn btn-sm" id="testVoiceBtn" data-action="test-voice">Test</button>
+            </div>
+            <button class="row" data-action="open-qr">
+              <span class="row-icon"><svg class="i"><use href="#i-qr"/></svg></span>
+              <span class="row-main"><span class="row-title">Open on phone</span><span class="row-sub">Show QR code</span></span>
+              <svg class="i xs muted"><use href="#i-chevron"/></svg>
+            </button>
+          </div>
+          <p class="footnote">Voice input and installing to the home screen require HTTPS. Start the secure tunnel and open that address on your phone.</p>
+
+          <div class="group-title">Install</div>
+          <div class="card prose-sm">
+            <p><strong>iPhone / iPad</strong> — open the secure address in Safari, tap Share, then <em>Add to Home Screen</em>.</p>
+            <p><strong>Android</strong> — open in Chrome, tap the ⋮ menu, then <em>Install app</em>.</p>
+          </div>
+          <div class="footnote center">AgentHub</div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- ───────────── Sheets ───────────── -->
+<div class="scrim" id="scrim" hidden></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" hidden>
+  <div class="sheet-grab"></div>
+  <div class="sheet-body" id="sheetBody"></div>
+</div>
+
+
+<!-- ───────────── Voice conversation ───────────── -->
+<div class="voice" id="voice" role="dialog" aria-modal="true" aria-label="Voice conversation" hidden>
+  <div class="voice-top">
+    <button class="icon-btn" data-action="voice-close" aria-label="End voice conversation"><svg class="i"><use href="#i-x"/></svg></button>
+    <button class="voice-agent" data-action="open-agents" aria-label="Change agent"><span class="dot"></span><span id="voiceAgent"></span><svg class="i xs"><use href="#i-chevron-down"/></svg></button>
+    <button class="icon-btn" id="voiceMute" data-action="voice-mute" aria-label="Mute spoken replies"><svg class="i"><use href="#i-volume"/></svg></button>
+  </div>
+  <div class="voice-stage">
+    <button class="orb" id="orb" data-action="voice-orb" data-phase="idle" aria-label="Talk">
+      <span class="orb-ring"></span><span class="orb-ring r2"></span><span class="orb-core"></span>
+    </button>
+    <div class="voice-state" id="voiceState" aria-live="polite">Tap to talk</div>
+  </div>
+  <div class="voice-text">
+    <div class="voice-you" id="voiceYou"></div>
+    <div class="voice-reply" id="voiceReply"></div>
+  </div>
+  <div class="voice-foot" id="voiceFoot">Pause to send · tap the orb to interrupt</div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<!-- Libraries -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+<script src="/static/app.js?v=__BUILD__"></script>
+</body>
+</html>

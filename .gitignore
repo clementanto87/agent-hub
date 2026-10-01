@@ -1,0 +1,26 @@
+# Local runtime database and dynamic uploads
+data/
+uploads/
+*.db
+*.db-journal
+*.log
+tunnel_url.txt
+models_cache.json
+voices/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# Environment and secrets
+.env
+.env.*
+
+# OS and Editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
