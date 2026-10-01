@@ -269,6 +269,78 @@
 
           <div class="page-head"><h2>Agent processes</h2><span class="muted sm" id="procCount"></span></div>
           <div class="stack" id="processList"></div>
+
+          <!-- LLM USAGE & QUOTAS (5H ROLLING & WEEKLY) -->
+          <div class="page-head" style="margin-top: 28px;">
+            <h2>LLM Quotas & Usage</h2>
+            <span class="muted sm" id="usageLiveBadge">● Live Rolling</span>
+          </div>
+
+          <div class="usage-grid">
+            <!-- 5-Hour Rolling Limit Card -->
+            <div class="usage-card">
+              <div class="usage-head">
+                <div>
+                  <div class="usage-badge rolling">5-Hour Rolling Window</div>
+                  <div class="usage-main-val" id="u5hUsed">0 tok</div>
+                </div>
+                <div class="usage-status-pill healthy" id="u5hStatusPill">Healthy</div>
+              </div>
+              
+              <div class="quota-bar-track">
+                <div class="quota-bar-fill" id="u5hBarFill" style="width: 0%;"></div>
+              </div>
+              
+              <div class="usage-sub-stats">
+                <span class="usage-remain"><strong id="u5hRemaining">—</strong> pending quota</span>
+                <span class="usage-pct" id="u5hPct">0% of 200k limit</span>
+              </div>
+
+              <div class="usage-meta-row">
+                <div class="meta-item">
+                  <span class="meta-label">Next Slot Reset</span>
+                  <span class="meta-val highlight" id="u5hReset">—</span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">Messages (5h)</span>
+                  <span class="meta-val" id="u5hMsgs">0</span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">24h Volume</span>
+                  <span class="meta-val" id="u24hUsed">0 tok</span>
+                </div>
+              </div>
+
+              <div class="agent-usage-title">5-Hour Agent Distribution</div>
+              <div class="agent-usage-chips" id="u5hAgentChips"></div>
+            </div>
+
+            <!-- Weekly 7-Day Window Card -->
+            <div class="usage-card">
+              <div class="usage-head">
+                <div>
+                  <div class="usage-badge weekly">Weekly Quota (7 Days)</div>
+                  <div class="usage-main-val" id="u7dUsed">0 tok</div>
+                </div>
+                <div class="usage-status-pill healthy" id="u7dStatusPill">Healthy</div>
+              </div>
+
+              <div class="quota-bar-track">
+                <div class="quota-bar-fill weekly" id="u7dBarFill" style="width: 0%;"></div>
+              </div>
+
+              <div class="usage-sub-stats">
+                <span class="usage-remain"><strong id="u7dRemaining">—</strong> pending quota</span>
+                <span class="usage-pct" id="u7dPct">0% of 1.5M limit</span>
+              </div>
+
+              <div class="agent-usage-title">7-Day Daily Velocity</div>
+              <div class="weekly-sparkbars" id="u7dSparkbars"></div>
+
+              <div class="agent-usage-title" style="margin-top: 4px;">Weekly Agent Distribution</div>
+              <div class="agent-usage-chips" id="u7dAgentChips"></div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -298,6 +370,24 @@
               <span class="row-main"><span class="row-title">Workspace</span><span class="row-sub mono" id="setWsSub"></span></span>
               <svg class="i xs muted"><use href="#i-chevron"/></svg>
             </button>
+          </div>
+
+          <div class="group-title">Quota & Usage Limits</div>
+          <div class="list">
+            <label class="row">
+              <span class="row-main">
+                <span class="row-title">5-Hour Quota Target</span>
+                <span class="row-sub">Token threshold for rolling 5h gauge (e.g. 200,000 for Pro tier)</span>
+              </span>
+              <input type="number" id="pref5hBudget" class="setting-input-num" value="200000" step="50000" min="10000">
+            </label>
+            <label class="row">
+              <span class="row-main">
+                <span class="row-title">Weekly Quota Target</span>
+                <span class="row-sub">Token threshold for 7-day quota gauge (e.g. 1,500,000)</span>
+              </span>
+              <input type="number" id="prefWeeklyBudget" class="setting-input-num" value="1500000" step="100000" min="50000">
+            </label>
           </div>
 
           <div class="group-title">Preferences</div>

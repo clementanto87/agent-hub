@@ -533,13 +533,49 @@ button.row:active { background: var(--surface-3); }
 .spark { position: absolute; right: 0; bottom: 0; width: 46%; height: 34px; opacity: .55; pointer-events: none; }
 .spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
 
-.proc { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--r-md); }
-.proc-main { flex: 1; min-width: 0; }
-.proc-name { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; }
-.proc-pid { font: 500 11.5px var(--mono); color: var(--text-3); }
-.proc-cmd { font: 12px var(--mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
-.proc-meta { font-size: 11.5px; color: var(--text-3); margin-top: 3px; }
-.empty-inline { padding: 26px 16px; text-align: center; color: var(--text-3); font-size: 13.5px; border: 1px dashed var(--line-strong); border-radius: var(--r-md); }
+/* ── LLM Usage & Quotas ─────────────────────────────────── */
+.usage-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 20px; }
+@media (min-width: 768px) { .usage-grid { grid-template-columns: 1fr 1fr; } }
+.usage-card { background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--r-md); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.usage-head { display: flex; justify-content: space-between; align-items: flex-start; }
+.usage-badge { display: inline-flex; align-items: center; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; padding: 3px 8px; border-radius: 6px; margin-bottom: 4px; }
+.usage-badge.rolling { background: rgba(99, 102, 241, .15); color: #818cf8; border: 1px solid rgba(99, 102, 241, .3); }
+.usage-badge.weekly { background: rgba(16, 185, 129, .15); color: #34d399; border: 1px solid rgba(16, 185, 129, .3); }
+.usage-main-val { font-size: 26px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.1; color: var(--text); }
+.usage-status-pill { font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 12px; text-transform: capitalize; }
+.usage-status-pill.healthy { background: rgba(34, 197, 94, .16); color: #4ade80; border: 1px solid rgba(34, 197, 94, .3); }
+.usage-status-pill.moderate { background: rgba(234, 179, 8, .16); color: #facc15; border: 1px solid rgba(234, 179, 8, .3); }
+.usage-status-pill.heavy { background: rgba(249, 115, 22, .16); color: #fb923c; border: 1px solid rgba(249, 115, 22, .3); }
+.usage-status-pill.exceeded { background: rgba(239, 68, 68, .2); color: #f87171; border: 1px solid rgba(239, 68, 68, .4); }
+
+.quota-bar-track { width: 100%; height: 8px; border-radius: 4px; background: var(--surface-3); overflow: hidden; position: relative; }
+.quota-bar-fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #6366f1, #818cf8); transition: width .5s cubic-bezier(0.16, 1, 0.3, 1); }
+.quota-bar-fill.weekly { background: linear-gradient(90deg, #059669, #34d399); }
+.quota-bar-fill.warn { background: linear-gradient(90deg, #d97706, #fbbf24); }
+.quota-bar-fill.danger { background: linear-gradient(90deg, #dc2626, #f87171); }
+
+.usage-sub-stats { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.usage-remain strong { color: var(--text); font-weight: 600; }
+
+.usage-meta-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 10px; background: var(--surface-2); border-radius: 10px; border: 1px solid var(--line); text-align: center; }
+.meta-item { display: flex; flex-direction: column; gap: 2px; }
+.meta-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); font-weight: 600; }
+.meta-val { font-size: 13.5px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text); }
+.meta-val.highlight { color: #818cf8; }
+
+.agent-usage-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); margin-top: 2px; }
+.agent-usage-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.agent-chip-stat { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 550; padding: 3px 8px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.agent-chip-stat .tok-cnt { color: var(--text-3); font-size: 11px; }
+
+.weekly-sparkbars { display: flex; align-items: flex-end; justify-content: space-between; gap: 6px; height: 60px; padding: 8px 6px 0; background: var(--surface-2); border-radius: 10px; border: 1px solid var(--line); }
+.sparkbar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; justify-content: flex-end; }
+.sparkbar-fill { width: 100%; max-width: 14px; border-radius: 3px 3px 0 0; background: #34d399; min-height: 3px; transition: height .4s var(--ease); }
+.sparkbar-col.today .sparkbar-fill { background: #60a5fa; box-shadow: 0 0 8px rgba(96, 165, 250, .4); }
+.sparkbar-label { font-size: 10px; font-weight: 600; color: var(--text-3); text-transform: uppercase; }
+
+.setting-input-num { width: 110px; height: 32px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line-strong); color: var(--text); padding: 0 8px; font: 500 13px var(--mono); text-align: right; outline: none; }
+.setting-input-num:focus { border-color: var(--accent); }
 
 /* ── History ────────────────────────────────────────────── */
 .search { display: flex; align-items: center; gap: 10px; padding: 0 14px; height: 44px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; color: var(--text-3); }

@@ -64,6 +64,8 @@ const state = {
     notifications: store.get('pref.notifications', true),
     sound: store.get('pref.sound', true),
     size: store.get('pref.size', 'md'),
+    fiveHourBudget: store.get('pref.fiveHourBudget', 200000),
+    weeklyBudget: store.get('pref.weeklyBudget', 1500000),
   },
 };
 if (!AGENTS[state.agent]) state.agent = 'antigravity';
@@ -1119,7 +1121,8 @@ function addUserMessage(text, ts, attachments = []) {
 }
 
 function formatTokens(n) {
-  if (!n || n <= 0) return '';
+  if (n === 0) return '0';
+  if (!n || n < 0) return '0';
   if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return `${Math.round(n)}`;
@@ -2091,6 +2094,96 @@ function setSpark(id, arr) {
   pl.setAttribute('points', arr.map((v, i) => `${n > 1 ? (i * 100) / (n - 1) : 0},${(23 - (Math.min(100, v) / 100) * 21).toFixed(1)}`).join(' '));
 }
 
+async function pollUsage() {
+  try {
+    const b5h = state.prefs.fiveHourBudget || 200000;
+    const bwk = state.prefs.weeklyBudget || 1500000;
+    const u = await api(`/api/usage?five_hour_budget=${encodeURIComponent(b5h)}&weekly_budget=${encodeURIComponent(bwk)}`);
+    if (!u) return;
+
+    const w5 = u.window_5h;
+    const w7 = u.window_7d;
+    const w24 = u.window_24h;
+
+    // 1. Render 5-Hour Rolling Card
+    const u5hUsedEl = $('#u5hUsed');
+    if (u5hUsedEl && w5) {
+      u5hUsedEl.textContent = `~${formatTokens(w5.tokens_used)} tok`;
+      const pill = $('#u5hStatusPill');
+      if (pill) {
+        pill.textContent = w5.status;
+        pill.className = `usage-status-pill ${w5.status}`;
+      }
+      const fill = $('#u5hBarFill');
+      if (fill) {
+        fill.style.width = `${Math.min(100, Math.max(0, w5.percent_used))}%`;
+        fill.className = `quota-bar-fill ${w5.percent_used >= 90 ? 'danger' : (w5.percent_used >= 75 ? 'warn' : '')}`;
+      }
+      if ($('#u5hRemaining')) $('#u5hRemaining').textContent = `~${formatTokens(w5.tokens_remaining)}`;
+      if ($('#u5hPct')) $('#u5hPct').textContent = `${w5.percent_used}% of ${formatTokens(w5.tokens_budget)} limit`;
+      if ($('#u5hReset')) $('#u5hReset').textContent = w5.next_reset_formatted === 'Idle' ? 'No active queue' : `In ${w5.next_reset_formatted}`;
+      if ($('#u5hMsgs')) $('#u5hMsgs').textContent = String(w5.messages_count);
+      if ($('#u24hUsed')) $('#u24hUsed').textContent = `~${formatTokens(w24?.tokens_used || 0)} tok`;
+
+      // 5h Agent distribution chips
+      const entries5 = Object.entries(w5.by_agent || {});
+      const aChips = entries5.map(([k, stat]) => {
+        const ag = AGENTS[k];
+        const iconHtml = ag ? icon(ag.icon, 'xs') : '🤖';
+        const name = ag ? ag.name : k;
+        return `<span class="agent-chip-stat">${iconHtml} <span>${esc(name)}</span> <span class="tok-cnt">~${formatTokens(stat.tokens)}</span></span>`;
+      }).join('');
+      if ($('#u5hAgentChips')) $('#u5hAgentChips').innerHTML = aChips || '<span class="muted sm">No activity in last 5 hours</span>';
+    }
+
+    // 2. Render Weekly (7-Day) Card
+    const u7dUsedEl = $('#u7dUsed');
+    if (u7dUsedEl && w7) {
+      u7dUsedEl.textContent = `~${formatTokens(w7.tokens_used)} tok`;
+      const pill7 = $('#u7dStatusPill');
+      if (pill7) {
+        pill7.textContent = w7.status;
+        pill7.className = `usage-status-pill ${w7.status}`;
+      }
+      const fill7 = $('#u7dBarFill');
+      if (fill7) {
+        fill7.style.width = `${Math.min(100, Math.max(0, w7.percent_used))}%`;
+        fill7.className = `quota-bar-fill weekly ${w7.percent_used >= 90 ? 'danger' : (w7.percent_used >= 75 ? 'warn' : '')}`;
+      }
+      if ($('#u7dRemaining')) $('#u7dRemaining').textContent = `~${formatTokens(w7.tokens_remaining)}`;
+      if ($('#u7dPct')) $('#u7dPct').textContent = `${w7.percent_used}% of ${formatTokens(w7.tokens_budget)} limit`;
+
+      // Weekly 7-day sparkbars
+      const maxDaily = Math.max(1, ...(w7.daily || []).map(d => (d.tokens > 0 ? d.tokens : d.messages * 50)));
+      const isToday = (idx, total) => idx === total - 1;
+      const sparkHtml = (w7.daily || []).map((d, i, arr) => {
+        const val = d.tokens > 0 ? d.tokens : (d.messages > 0 ? d.messages * 50 : 0);
+        const hPct = val > 0 ? Math.max(8, Math.round((val / maxDaily) * 100)) : 4;
+        const todayCls = isToday(i, arr.length) ? 'today' : '';
+        const title = `${d.date} (${d.day}): ~${formatTokens(d.tokens)} tok · ${d.messages} msgs`;
+        return `
+        <div class="sparkbar-col ${todayCls}" title="${esc(title)}">
+          <div class="sparkbar-fill" style="height: ${hPct}%;"></div>
+          <span class="sparkbar-label">${d.day}</span>
+        </div>`;
+      }).join('');
+      if ($('#u7dSparkbars')) $('#u7dSparkbars').innerHTML = sparkHtml;
+
+      // Weekly Agent distribution chips
+      const entries7 = Object.entries(w7.by_agent || {});
+      const aChips7 = entries7.map(([k, stat]) => {
+        const ag = AGENTS[k];
+        const iconHtml = ag ? icon(ag.icon, 'xs') : '🤖';
+        const name = ag ? ag.name : k;
+        return `<span class="agent-chip-stat">${iconHtml} <span>${esc(name)}</span> <span class="tok-cnt">~${formatTokens(stat.tokens)}</span></span>`;
+      }).join('');
+      if ($('#u7dAgentChips')) $('#u7dAgentChips').innerHTML = aChips7 || '<span class="muted sm">No weekly activity recorded</span>';
+    }
+  } catch (e) {
+    /* ignore usage poll error */
+  }
+}
+
 async function pollSystem() {
   try {
     const d = await api('/api/system');
@@ -2105,6 +2198,7 @@ async function pollSystem() {
   } catch {
     $('#monUptime').textContent = 'Offline';
   }
+  await pollUsage();
 }
 
 function fmtDuration(s) {
@@ -2220,6 +2314,8 @@ function newChatSilently() {
 function refreshSettings() {
   $('#setOrigin').textContent = location.origin;
   $('#setWsSub').textContent = state.workspace;
+  if ($('#pref5hBudget')) $('#pref5hBudget').value = state.prefs.fiveHourBudget || 200000;
+  if ($('#prefWeeklyBudget')) $('#prefWeeklyBudget').value = state.prefs.weeklyBudget || 1500000;
   if ($('#prefNotifications')) $('#prefNotifications').checked = state.prefs.notifications !== false;
   if ($('#prefSound')) $('#prefSound').checked = state.prefs.sound !== false;
   if ($('#prefEnter')) $('#prefEnter').checked = state.prefs.enter;
@@ -2781,6 +2877,21 @@ threadEl().addEventListener('scroll', onThreadScroll, { passive: true });
 $('#historySearch')?.addEventListener('input', renderHistory);
 $('#skillsSearch')?.addEventListener('input', renderSkills);
 $('#mcpSearch')?.addEventListener('input', renderMcp);
+
+$('#pref5hBudget')?.addEventListener('change', (e) => {
+  const val = Math.max(1000, parseInt(e.target.value) || 200000);
+  state.prefs.fiveHourBudget = val;
+  store.set('pref.fiveHourBudget', val);
+  pollUsage();
+  toast(`5h Quota Target updated to ${formatTokens(val)} tok`, 'ok');
+});
+$('#prefWeeklyBudget')?.addEventListener('change', (e) => {
+  const val = Math.max(5000, parseInt(e.target.value) || 1500000);
+  state.prefs.weeklyBudget = val;
+  store.set('pref.weeklyBudget', val);
+  pollUsage();
+  toast(`Weekly Quota Target updated to ${formatTokens(val)} tok`, 'ok');
+});
 
 $('#prefNotifications')?.addEventListener('change', async (e) => {
   state.prefs.notifications = e.target.checked;

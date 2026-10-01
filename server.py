@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from services.agent_runner import stream_agent
 from services.session_store import (
     init_db, list_sessions, get_session, create_session,
-    add_message, update_session_title, delete_session
+    add_message, update_session_title, delete_session, get_usage_metrics
 )
 from services.system_monitor import get_system_stats, kill_process
 from services.terminal_session import TerminalManager
@@ -180,6 +180,10 @@ async def remove_session(session_id: str):
 @app.get("/api/system")
 async def system_stats():
     return get_system_stats()
+
+@app.get("/api/usage")
+async def usage_stats(five_hour_budget: int = 200000, weekly_budget: int = 1500000):
+    return get_usage_metrics(five_hour_budget=five_hour_budget, weekly_budget=weekly_budget)
 
 @app.post("/api/process/kill")
 async def kill_proc(request: Request):
