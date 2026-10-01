@@ -135,7 +135,7 @@ def get_usage_metrics(five_hour_budget: int = 200000, weekly_budget: int = 15000
     """
     Computes rolling 5-hour, 24-hour, and 7-day usage statistics, remaining quota,
     estimated window reset countdowns, and per-agent token breakdowns.
-    Optionally filters by a specific agent (e.g. 'claude', 'antigravity', 'codex', 'muse').
+    Optionally filters by a specific agent (e.g. 'claude', 'antigravity', 'codex').
     """
     init_db()
     now = time.time()

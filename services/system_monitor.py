@@ -29,9 +29,6 @@ def get_system_stats():
             elif "codex" in name or "/usr/local/bin/codex" in cmd_str:
                 is_agent = True
                 agent_type = "OpenAI Codex"
-            elif "muse" in name or "/usr/local/bin/muse" in cmd_str:
-                is_agent = True
-                agent_type = "Meta Muse"
             elif "web_agent.py" in cmd_str or "server.py" in cmd_str:
                 is_agent = True
                 agent_type = "AgentHub Server"

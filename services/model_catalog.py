@@ -21,7 +21,7 @@ from typing import Dict, List, Optional
 
 CACHE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "models_cache.json")
 TTL_SEC = 6 * 3600
-AGENTS = ("antigravity", "claude", "codex", "muse")
+AGENTS = ("antigravity", "claude", "codex")
 MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,120}$")
 
 _lock = threading.Lock()
@@ -94,16 +94,8 @@ def _fetch_claude() -> dict:
     return {"models": models, "default": default}
 
 
-def _fetch_muse() -> dict:
-    models = [
-        {"id": "muse-spark-1.3", "name": "Muse Spark 1.3 (Default)"},
-        {"id": "muse-spark", "name": "Muse Spark"},
-        {"id": "muse-preview", "name": "Muse Preview"}
-    ]
-    return {"models": models, "default": "muse-spark-1.3"}
-
-
-_FETCHERS = {"antigravity": _fetch_antigravity, "codex": _fetch_codex, "claude": _fetch_claude, "muse": _fetch_muse}
+AGENTS = ("antigravity", "claude", "codex")
+_FETCHERS = {"antigravity": _fetch_antigravity, "codex": _fetch_codex, "claude": _fetch_claude}
 
 
 # ── public API ─────────────────────────────────────────────────────────────

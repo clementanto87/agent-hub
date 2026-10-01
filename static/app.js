@@ -10,14 +10,13 @@ const AGENTS = {
   antigravity: { name: 'Antigravity', full: 'Google Antigravity', desc: 'Autonomous agent with tools and filesystem access', color: 'var(--c-antigravity)', icon: 'a-antigravity' },
   claude:      { name: 'Claude Code', full: 'Anthropic Claude Code', desc: 'Claude Code CLI with full tool execution', color: 'var(--c-claude)', icon: 'a-claude' },
   codex:       { name: 'Codex', full: 'OpenAI Codex', desc: 'OpenAI coding agent', color: 'var(--c-codex)', icon: 'a-codex' },
-  muse:        { name: 'Meta Muse', full: 'Meta Muse (Muse Code)', desc: 'Meta autonomous AI coding agent with full VM access', color: 'var(--c-muse)', icon: 'a-muse' },
   bash:        { name: 'Shell', full: 'Linux Shell', desc: 'Run a command directly in bash', color: 'var(--c-bash)', icon: 'a-bash' },
   auto:        { name: 'Auto', full: 'Smart Router', desc: 'Picks the best agent for each message', color: 'var(--c-auto)', icon: 'a-auto' },
 };
 
 // The backend prefixes each reply with a tag line naming the agent that ran.
-const AGENT_TAGS = { '🚀': 'antigravity', '🟣': 'claude', '🟢': 'codex', '🔷': 'muse', '⚙️': 'bash' };
-const TAG_RE = /^\s*(🚀|🟣|🟢|🔷|⚙️)\s*\*\[[^\]\n]*\]\*[ \t]*\n*/u;
+const AGENT_TAGS = { '🚀': 'antigravity', '🟣': 'claude', '🟢': 'codex', '⚙️': 'bash' };
+const TAG_RE = /^\s*(🚀|🟣|🟢|⚙️)\s*\*\[[^\]\n]*\]\*[ \t]*\n*/u;
 
 const SUGGESTIONS = [
   { icon: 'i-sparkle', title: 'Shared memory',   sub: 'Search pet-memory facts',        prompt: 'Search shared memory for recent facts and family records', cmd: 'python3 -c "import sys; sys.path.insert(0, \'/root/workspace/pet/infra/memory\'); import server; print(server.memory_recall(\'\', 5))"' },
@@ -404,8 +403,8 @@ document.addEventListener('keydown', (e) => {
   sheet.addEventListener('touchcancel', endDrag, { passive: true });
 })();
 
-const MODEL_AGENTS = ['antigravity', 'claude', 'codex', 'muse'];
-const MODEL_SOURCE = { antigravity: 'Antigravity', claude: 'Anthropic', codex: 'Codex', muse: 'Meta' };
+const MODEL_AGENTS = ['antigravity', 'claude', 'codex'];
+const MODEL_SOURCE = { antigravity: 'Antigravity', claude: 'Anthropic', codex: 'Codex' };
 
 function currentModel(agent = state.agent) {
   return state.modelSel[agent] || null;
@@ -2266,8 +2265,7 @@ async function pollUsage() {
     // Dynamic badge labels
     const badge5Label = curAgent === 'claude' ? 'Claude 5-Hour Limit' :
       (curAgent === 'antigravity' ? 'Antigravity 5h Window' :
-      (curAgent === 'codex' ? 'Codex 5h Window' :
-      (curAgent === 'muse' ? 'Meta Muse 5h Window' : '5-Hour Rolling Window')));
+      (curAgent === 'codex' ? 'Codex 5h Window' : '5-Hour Rolling Window'));
     const badge5El = $('.usage-badge.rolling');
     if (badge5El) badge5El.textContent = badge5Label;
 
@@ -2671,11 +2669,10 @@ function openSkillCreator({ name = '', description = '', content = '', agent_sco
       <label>
         <span class="sheet-meta">Agent Scope</span>
         <select class="composer-input" id="skillInputScope" style="border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:4px; background:var(--surface-2);">
-          <option value="global" ${agent_scope === 'global' ? 'selected' : ''}>Global (All Agents: Antigravity, Claude, Codex, Muse)</option>
+          <option value="global" ${agent_scope === 'global' ? 'selected' : ''}>Global (All Agents: Antigravity, Claude, Codex)</option>
           <option value="antigravity" ${agent_scope === 'antigravity' ? 'selected' : ''}>Google Antigravity Only</option>
           <option value="claude" ${agent_scope === 'claude' ? 'selected' : ''}>Claude Code Only</option>
           <option value="codex" ${agent_scope === 'codex' ? 'selected' : ''}>OpenAI Codex Only</option>
-          <option value="muse" ${agent_scope === 'muse' ? 'selected' : ''}>Meta Muse Only</option>
         </select>
       </label>
       <label>
