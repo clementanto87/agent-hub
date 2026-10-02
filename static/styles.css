@@ -75,7 +75,7 @@ a { color: var(--accent); }
 .only-mobile { display: flex; }
 
 /* ── Layout ─────────────────────────────────────────────── */
-#app { display: flex; height: 100dvh; width: 100%; position: relative; }
+#app { display: flex; height: var(--app-h, 100dvh); width: 100%; position: relative; }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
 
 /* ── Desktop sidebar (hidden on phones) ─────────────────── */
@@ -100,13 +100,13 @@ a { color: var(--accent); }
 
 .topbar {
   display: flex; align-items: center; gap: 4px;
-  padding: calc(8px + var(--sat)) 8px 8px 16px;
+  padding: calc(8px + var(--sat)) 16px 8px 16px;
   background: rgba(0, 0, 0, .78);
   backdrop-filter: saturate(1.6) blur(20px);
   -webkit-backdrop-filter: saturate(1.6) blur(20px);
   z-index: 20; min-height: 60px;
 }
-body[data-mode="thread"] .topbar { padding-left: 4px; border-bottom: 1px solid var(--line); }
+body[data-mode="thread"] .topbar { padding-left: 4px; padding-right: 6px; border-bottom: 1px solid var(--line); }
 body[data-mode="tab"] .topbar { border-bottom: 1px solid var(--line); }
 .back-btn { width: 44px; height: 44px; color: var(--text); }
 .topbar-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }

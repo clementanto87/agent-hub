@@ -3430,6 +3430,25 @@ async function checkForUpdate() {
    Boot
    ════════════════════════════════════════════════════════════ */
 
+// iOS home-screen apps with a translucent status bar get a viewport that is short by the
+// status-bar height, which leaves an empty band under the tab bar and the composer.
+// Size the app to the physical screen there instead.
+function fitStandaloneHeight() {
+  const root = document.documentElement;
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+  const portrait = window.matchMedia('(orientation: portrait)').matches;
+  if (!ios || !standalone || !portrait) { root.style.removeProperty('--app-h'); return; }
+  const full = Math.max(screen.width, screen.height);
+  const gap = full - window.innerHeight;
+  if (gap >= 0 && gap < 80) root.style.setProperty('--app-h', `${full}px`);
+  else root.style.removeProperty('--app-h');
+}
+fitStandaloneHeight();
+window.addEventListener('resize', fitStandaloneHeight);
+window.addEventListener('orientationchange', () => setTimeout(fitStandaloneHeight, 300));
+window.addEventListener('pageshow', fitStandaloneHeight);
+
 async function boot() {
   applySize();
   applyAgent();
