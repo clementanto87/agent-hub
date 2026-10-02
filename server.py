@@ -438,6 +438,49 @@ async def view_file_content(path: str):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
+@app.api_route("/api/file/raw", methods=["GET", "HEAD"])
+async def get_raw_file(path: str):
+    """Serve raw file contents (images, media, documents) for inline display and download."""
+    import mimetypes
+    raw_path = (path or "").strip().strip('"').strip("'")
+    if raw_path.startswith("file://"):
+        raw_path = raw_path[7:]
+    target = os.path.realpath(os.path.expanduser(raw_path))
+    if not os.path.exists(target) or not os.path.isfile(target):
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    mime_type, _ = mimetypes.guess_type(target)
+    return FileResponse(target, media_type=mime_type or "application/octet-stream", filename=os.path.basename(target), content_disposition_type="inline")
+
+@app.api_route("/root/{file_path:path}", methods=["GET", "HEAD"])
+async def serve_root_file(file_path: str):
+    """Serve any file under /root directly by absolute URL."""
+    import mimetypes
+    target = os.path.realpath(os.path.join("/root", file_path))
+    if not os.path.exists(target) or not os.path.isfile(target):
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    mime_type, _ = mimetypes.guess_type(target)
+    return FileResponse(target, media_type=mime_type or "application/octet-stream", filename=os.path.basename(target), content_disposition_type="inline")
+
+@app.api_route("/tmp/{file_path:path}", methods=["GET", "HEAD"])
+async def serve_tmp_file(file_path: str):
+    """Serve any file under /tmp directly by absolute URL."""
+    import mimetypes
+    target = os.path.realpath(os.path.join("/tmp", file_path))
+    if not os.path.exists(target) or not os.path.isfile(target):
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    mime_type, _ = mimetypes.guess_type(target)
+    return FileResponse(target, media_type=mime_type or "application/octet-stream", filename=os.path.basename(target), content_disposition_type="inline")
+
+@app.api_route("/raw/{file_path:path}", methods=["GET", "HEAD"])
+async def serve_raw_path(file_path: str):
+    """Serve arbitrary filesystem file by /raw/path."""
+    import mimetypes
+    target = os.path.realpath("/" + file_path)
+    if not os.path.exists(target) or not os.path.isfile(target):
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    mime_type, _ = mimetypes.guess_type(target)
+    return FileResponse(target, media_type=mime_type or "application/octet-stream", filename=os.path.basename(target), content_disposition_type="inline")
+
 @app.api_route("/api/qrcode", methods=["GET", "HEAD"])
 async def get_qr_code(url: str = None):
     target_url = url if url else get_tunnel_url() or "http://49.13.196.104:8080"

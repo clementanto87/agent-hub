@@ -1303,7 +1303,15 @@ function stripTag(text) {
 
 function mdToHtml(text) {
   if (!window.marked || !window.DOMPurify) return `<p style="white-space:pre-wrap">${esc(text)}</p>`;
-  return DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: true }));
+  let processed = (text || '').replace(/!\[([^\]]*)\]\((file:\/\/\/?[^\)]+|\/[^\)]+)\)/g, (match, alt, rawUrl) => {
+    let clean = rawUrl;
+    if (clean.startsWith('file://')) clean = clean.slice(7);
+    if (clean.startsWith('/') && !clean.startsWith('/static') && !clean.startsWith('/uploads') && !clean.startsWith('/api/')) {
+      return `![${alt}](/api/file/raw?path=${encodeURIComponent(clean)})`;
+    }
+    return match;
+  });
+  return DOMPurify.sanitize(marked.parse(processed, { gfm: true, breaks: true }));
 }
 
 function formatDiffCode(rawCode) {
@@ -1336,6 +1344,33 @@ function enhanceMarkdown(root, final) {
   $$('table', root).forEach((t) => {
     const w = document.createElement('div'); w.className = 'table-wrap';
     t.replaceWith(w); w.appendChild(t);
+  });
+  $$('img', root).forEach((img) => {
+    let src = img.getAttribute('src') || '';
+    if (src.startsWith('file://')) src = src.slice(7);
+    if (src.startsWith('/') && !src.startsWith('/static') && !src.startsWith('/uploads') && !src.startsWith('/api/')) {
+      img.src = `/api/file/raw?path=${encodeURIComponent(src)}`;
+    }
+    img.loading = 'lazy';
+    img.style.maxWidth = '100%';
+    img.style.maxHeight = '420px';
+    img.style.objectFit = 'contain';
+    img.style.borderRadius = '12px';
+    img.style.marginTop = '10px';
+    img.style.border = '1px solid var(--line)';
+    img.style.background = '#0a0a10';
+    img.style.display = 'block';
+    img.style.cursor = 'zoom-in';
+    img.onclick = () => {
+      openSheet(`
+        <div style="text-align:center;">
+          <img src="${esc(img.src)}" style="max-width:100%; max-height:75vh; border-radius:12px; object-fit:contain;" alt="${esc(img.alt || 'Preview')}">
+          <div style="margin-top:14px; display:flex; justify-content:center; gap:10px;">
+            <a href="${esc(img.src)}" target="_blank" download class="btn btn-primary btn-sm" style="display:inline-flex; align-items:center; gap:6px;">${icon('i-download')} Download Image</a>
+          </div>
+        </div>
+      `);
+    };
   });
   $$('pre', root).forEach((pre) => {
     const code = $('code', pre);
