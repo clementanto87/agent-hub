@@ -863,6 +863,76 @@ function renderInspector() {
 }
 wideScreen.addEventListener?.('change', renderInspector);
 
+// Folders worth offering first: recently used (this device + conversation history) and the server's pinned list.
+function folderShortcuts() {
+  const seen = new Set();
+  const take = (path, name, sub) => {
+    if (!path || seen.has(path)) return null;
+    seen.add(path);
+    return { path, name: name || basename(path), sub: (sub || path).replace(/^\/root(?=\/|$)/, '~') };
+  };
+  const fromHistory = [...state.sessions].sort((a, b) => b.updated_at - a.updated_at).map((x) => x.workspace);
+  const recent = [...store.get('recentWs', []), ...fromHistory]
+    .map((p) => take(p)).filter(Boolean).slice(0, 6);
+  const pinned = (state.workspaces || [])
+    .map((w) => take(w.path, (w.name || '').replace(/\s*\(.*\)\s*$/, ''), w.path)).filter(Boolean);
+  return { recent, pinned };
+}
+
+function folderRow(f) {
+  const on = f.path === state.workspace;
+  return `<button class="folder-row ${on ? 'selected' : ''}" data-select-browse-ws="${esc(f.path)}" data-q="${esc((f.name + ' ' + f.path).toLowerCase())}">
+    <span class="folder-ico">${icon('i-folder')}</span>
+    <span class="folder-main"><span class="folder-name">${esc(f.name)}</span><span class="folder-path">${esc(f.sub)}</span></span>
+    ${on ? `<span class="tick">${icon('i-check')}</span>` : ''}
+  </button>`;
+}
+
+// One tap picks a folder; browsing the VM is the fallback.
+function openFolderPicker() {
+  browseMode = 'workspace';
+  const { recent, pinned } = folderShortcuts();
+  openSheet(`
+    <h3>Choose a folder</h3>
+    <div class="search folder-search">
+      ${icon('i-search')}
+      <input id="folderQuery" type="search" placeholder="Filter, or paste a path like /root/…" autocomplete="off" spellcheck="false" aria-label="Filter folders or enter a path">
+    </div>
+    <button class="folder-row path-go" id="folderPathGo" hidden></button>
+    ${recent.length ? `<div class="folder-group"><h4>Recent</h4>${recent.map(folderRow).join('')}</div>` : ''}
+    ${pinned.length ? `<div class="folder-group"><h4>Pinned</h4>${pinned.map(folderRow).join('')}</div>` : ''}
+    <button class="folder-row browse" data-browse-to="${esc(state.workspace || '/root')}">
+      <span class="folder-ico">${icon('i-search')}</span>
+      <span class="folder-main"><span class="folder-name">Browse all folders</span><span class="folder-path">Starting from ${esc(basename(state.workspace || '/root'))}</span></span>
+      ${icon('i-chevron', 'xs muted')}
+    </button>`, (body) => {
+    const q = $('#folderQuery', body);
+    const go = $('#folderPathGo', body);
+    q.addEventListener('input', () => {
+      const v = q.value.trim();
+      const lv = v.toLowerCase();
+      $$('.folder-group .folder-row', body).forEach((r) => { r.hidden = !!lv && !r.dataset.q.includes(lv); });
+      $$('.folder-group', body).forEach((g) => { g.hidden = !$$('.folder-row', g).some((r) => !r.hidden); });
+      const isPath = v.startsWith('/') || v.startsWith('~');
+      go.hidden = !isPath;
+      if (isPath) {
+        const path = v.replace(/^~/, '/root');
+        go.dataset.browseTo = path;
+        go.innerHTML = `<span class="folder-ico">${icon('i-folder')}</span><span class="folder-main"><span class="folder-name">Open ${esc(path)}</span><span class="folder-path">Browse into it, then tap Use</span></span>${icon('i-chevron', 'xs muted')}`;
+      }
+    });
+    q.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (!go.hidden) { openWorkspaceSheet(go.dataset.browseTo); return; }
+      const first = $$('.folder-group .folder-row', body).find((r) => !r.hidden);
+      if (first) first.click();
+    });
+  });
+}
+
+let browseMode = 'workspace';   // 'workspace' picks a folder; 'attach' also lists files to attach
+
 async function openWorkspaceSheet(browsePath) {
   if (typeof browsePath === 'string' && browsePath.trim()) {
     currentBrowsingPath = browsePath.trim();
@@ -903,89 +973,42 @@ async function openWorkspaceSheet(browsePath) {
     const dirs = data.dirs || [];
     const files = data.files || [];
 
+    const attach = browseMode === 'attach';
     openSheet(`
-      <div class="browser-header">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <h3 style="margin:0;">Select Folder / Workspace</h3>
-          <button class="btn btn-ghost btn-sm" data-action="toggle-hidden-folders" style="font-size:11px; padding:2px 8px;">
-            ${browseShowHidden ? 'Hide dotfiles' : 'Show dotfiles'}
-          </button>
-        </div>
-        <p class="lead" style="margin:0;">Navigate any directory on the VM or type a path.</p>
+      <div class="browser-top">
+        ${attach ? '' : `<button class="btn btn-ghost btn-sm" data-action="open-workspaces">${icon('i-back', 'xs')}Shortcuts</button>`}
+        <h3>${attach ? 'Attach a file from the VM' : 'Browse folders'}</h3>
+        <button class="btn btn-ghost btn-sm" data-action="toggle-hidden-folders">${browseShowHidden ? 'Hide hidden' : 'Show hidden'}</button>
       </div>
 
-      <!-- Pinned Shortcuts -->
-      <div class="pinned-workspaces">
-        <button class="pinned-chip ${data.path === '/root/Documents/antigravity/clever-einstein' ? 'active' : ''}" data-browse-to="/root/Documents/antigravity/clever-einstein">🚀 clever-einstein</button>
-        <button class="pinned-chip ${data.path === '/root/workspace/tentamus' ? 'active' : ''}" data-browse-to="/root/workspace/tentamus">🏢 tentamus</button>
-        <button class="pinned-chip ${data.path === '/root/Documents/Personal' ? 'active' : ''}" data-browse-to="/root/Documents/Personal">📑 Personal</button>
-        <button class="pinned-chip ${data.path === '/root/workspace' ? 'active' : ''}" data-browse-to="/root/workspace">🗂️ workspace</button>
-        <button class="pinned-chip ${data.path === '/root' ? 'active' : ''}" data-browse-to="/root">🏠 /root</button>
-        <button class="pinned-chip ${data.path === '/' ? 'active' : ''}" data-browse-to="/">📂 /</button>
-      </div>
-
-      <!-- Breadcrumbs & Path Input -->
       <div class="browser-crumbs">${breadcrumbHtml}</div>
-      <div class="browser-path-bar">
-        <span style="color:var(--text-3); font-size:14px;">📁</span>
-        <input id="browserPathInput" class="browser-input" type="text" value="${esc(data.path)}" placeholder="Type or paste any path (/...)" autocomplete="off" spellcheck="false">
-        <button class="btn btn-sm btn-ghost" data-action="browse-input-go" style="padding:4px 10px; font-weight:600;">Open</button>
-      </div>
 
-      ${isCurrentActive ? `<div class="current-selected-badge">${icon('i-check')} <span>Currently active workspace</span></div>` : ''}
-
-      <!-- Directory & File List -->
       <div class="browse-list">
         ${data.parent ? `
-          <button class="browse-row" data-browse-to="${esc(data.parent)}" style="color:var(--text-2);">
-            <div class="browse-left">
-              <span style="font-size:15px;">⬆️</span>
-              <span class="browse-name">.. (Parent directory)</span>
-            </div>
+          <button class="browse-row" data-browse-to="${esc(data.parent)}">
+            <span class="browse-left">${icon('i-back', 'xs muted')}<span class="browse-name muted">Up to ${esc(basename(data.parent))}</span></span>
           </button>` : ''}
-        
-        ${dirs.length ? `
-          <div class="browse-section-title">
-            <span>📁 Folders (${dirs.length})</span>
-          </div>
-          ${dirs.map((d) => `
-            <button class="browse-row" data-browse-to="${esc(d.path)}">
-              <div class="browse-left">
-                <span style="color:#60a5fa; font-size:16px;">📁</span>
-                <span class="browse-name">${esc(d.name)}</span>
-              </div>
-              <div style="display:flex; align-items:center; gap:6px;">
-                <span style="color:var(--text-3);">${icon('i-chevron', 'xs')}</span>
-              </div>
-            </button>`).join('')}
-        ` : ''}
-
-        ${files.length ? `
-          <div class="browse-section-title" style="${dirs.length ? 'margin-top:6px; border-top:1px solid var(--line); padding-top:8px;' : ''}">
-            <span>📄 Files (${files.length})</span>
-          </div>
+        ${dirs.map((d) => `
+          <div class="browse-row folder ${d.path === state.workspace ? 'current' : ''}">
+            <button class="browse-left browse-open" data-browse-to="${esc(d.path)}">
+              ${icon('i-folder')}<span class="browse-name">${esc(d.name)}</span>${icon('i-chevron', 'xs muted')}
+            </button>
+            ${attach ? '' : `<button class="use-btn" data-select-browse-ws="${esc(d.path)}">${d.path === state.workspace ? 'In use' : 'Use'}</button>`}
+          </div>`).join('')}
+        ${attach && files.length ? `
+          <div class="browse-section-title">Files</div>
           ${files.map((f) => `
             <button class="browse-row" data-view-file="${esc(f.path)}">
-              <div class="browse-left">
-                <span style="font-size:16px;">${fileIcon(f.ext)}</span>
-                <span class="browse-name">${esc(f.name)}</span>
-              </div>
-              <div style="display:flex; align-items:center; gap:6px;">
-                <span class="browse-size">${esc(f.size_fmt)}</span>
-                <span style="color:var(--text-3); font-size:12px;">👁️</span>
-              </div>
-            </button>`).join('')}
-        ` : ''}
-
-        ${!dirs.length && !files.length ? '<div style="color:var(--text-3); font-size:13px; padding:16px; text-align:center;">(Empty directory)</div>' : ''}
+              <span class="browse-left"><span style="font-size:16px;">${fileIcon(f.ext)}</span><span class="browse-name">${esc(f.name)}</span></span>
+              <span class="browse-size">${esc(f.size_fmt)}</span>
+            </button>`).join('')}` : ''}
+        ${!dirs.length && (!attach || !files.length) ? `<div class="browse-empty">No ${attach ? '' : 'sub'}folders here.</div>` : ''}
       </div>
 
-      <!-- Select Button -->
-      <div class="sheet-actions" style="margin-top:4px;">
-        <button class="btn btn-primary btn-block" data-select-browse-ws="${esc(data.path)}" style="height:46px; font-weight:650;">
-          ${icon('i-check')} Select "${esc(data.name || data.path)}" as Workspace
-        </button>
-      </div>
+      ${attach ? '' : `
+      <button class="btn btn-primary btn-block use-here" data-select-browse-ws="${esc(data.path)}">
+        ${icon('i-check')} ${isCurrentActive ? 'Keep' : 'Use'} “${esc(data.name || data.path)}”
+      </button>`}
     `);
 
     const inp = $('#browserPathInput');
@@ -1110,7 +1133,9 @@ function renderAgentRow() {
     const label = k === 'claude' ? 'Claude' : a.name;
     return `<button class="agent-chip ${on ? 'on' : ''}" role="radio" aria-checked="${on}" style="--agent:${a.color}" data-agent-chip="${k}">
       <span class="dot"></span>${esc(model ? `${label} · ${modelName(k, model)}` : label)}${on && MODEL_AGENTS.includes(k) ? icon('i-chevron-down', 'xs') : ''}</button>`;
-  }).join('') + `<button class="agent-chip ws" data-action="open-workspaces" aria-label="Workspace: ${esc(state.workspace)}">${icon('i-folder', 'xs')}${esc(basename(state.workspace))}</button>`;
+  }).join('');
+  $('#wsBtnLabel').textContent = basename(state.workspace);
+  $('#wsBtn').title = state.workspace;
 }
 
 function applyAgent() {
@@ -1142,6 +1167,7 @@ function applyWorkspace() {
 function setWorkspace(path) {
   if (path === state.workspace) return;
   state.workspace = path;
+  store.set('recentWs', [path, ...store.get('recentWs', []).filter((p) => p !== path)].slice(0, 8));
   applyWorkspace();
   termStale = true;
   toast(`Workspace: ${basename(path)}`, 'ok');
@@ -2957,14 +2983,14 @@ const actions = {
       <button class="opt" data-action="${mcp ? 'open-mcp-gen' : 'open-skill-gen'}"><span class="opt-ico">${icon('i-sparkle')}</span><span class="opt-main"><span class="opt-title">Describe it, an agent drafts it</span><br><span class="opt-sub">You review before saving</span></span></button>`);
   },
   'open-agents': openAgentSheet,
-  'open-workspaces': () => openWorkspaceSheet(state.workspace || '/root'),
+  'open-workspaces': openFolderPicker,
   'open-git-changes': () => openGitChangesSheet(),
   'view-file-diff': (el) => openGitChangesSheet(el.dataset.file),
   'open-qr': openQrSheet,
   'open-attach': openAttachSheet,
   'pick-camera': () => { closeSheet(); $('#cameraInput')?.click(); },
   'pick-device-file': () => { closeSheet(); $('#mediaFileInput')?.click(); },
-  'pick-vm-file': () => { closeSheet(); openWorkspaceSheet(state.workspace || '/root'); },
+  'pick-vm-file': () => { browseMode = 'attach'; openWorkspaceSheet(state.workspace || '/root'); },
   'fetch-attach-url': () => { const val = $('#attachUrlInput')?.value.trim(); if (val) attachExternalUrl(val); },
   send: () => {
     const mode = $('#sendBtn').dataset.mode;
