@@ -1,0 +1,133 @@
+import os
+import json
+import time
+import urllib.parse
+import requests
+from typing import Dict, Any, List, Optional
+
+CLIENT_SECRET_PATH = "/root/.config/gws/client_secret.json"
+CREDENTIALS_JSON_PATH = "/root/.config/gws/credentials.json"
+TOKEN_CACHE_PATH = "/root/.config/gws/token_cache.json"
+
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/drive",
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile"
+]
+
+def load_client_secrets() -> Dict[str, str]:
+    if not os.path.exists(CLIENT_SECRET_PATH):
+        return {}
+    try:
+        with open(CLIENT_SECRET_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            client_info = data.get("installed") or data.get("web") or {}
+            return {
+                "client_id": client_info.get("client_id", ""),
+                "client_secret": client_info.get("client_secret", ""),
+                "auth_uri": client_info.get("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
+                "token_uri": client_info.get("token_uri", "https://oauth2.googleapis.com/token"),
+            }
+    except Exception:
+        return {}
+
+def get_auth_url(redirect_uri: str = "http://localhost:8080/auth/google/callback") -> str:
+    secrets = load_client_secrets()
+    if not secrets.get("client_id"):
+        return ""
+    params = {
+        "client_id": secrets["client_id"],
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": " ".join(SCOPES),
+        "access_type": "offline",
+        "prompt": "select_account consent"
+    }
+    return f"{secrets['auth_uri']}?{urllib.parse.urlencode(params)}"
+
+def exchange_code_for_tokens(code: str, redirect_uri: str = "http://localhost:8080/auth/google/callback") -> Dict[str, Any]:
+    secrets = load_client_secrets()
+    if not secrets.get("client_id") or not secrets.get("client_secret"):
+        return {"success": False, "error": "Missing client credentials"}
+
+    data = {
+        "code": code,
+        "client_id": secrets["client_id"],
+        "client_secret": secrets["client_secret"],
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code"
+    }
+    resp = requests.post(secrets["token_uri"], data=data)
+    if resp.status_code != 200:
+        return {"success": False, "error": resp.text}
+
+    tokens = resp.json()
+    save_tokens(tokens)
+    return {"success": True, "tokens": tokens}
+
+def save_tokens(tokens: Dict[str, Any]):
+    os.makedirs(os.path.dirname(CREDENTIALS_JSON_PATH), exist_ok=True)
+    tokens["saved_at"] = time.time()
+    with open(CREDENTIALS_JSON_PATH, "w", encoding="utf-8") as f:
+        json.dump(tokens, f, indent=2)
+
+def load_access_token() -> Optional[str]:
+    if not os.path.exists(CREDENTIALS_JSON_PATH):
+        return None
+    try:
+        with open(CREDENTIALS_JSON_PATH, "r", encoding="utf-8") as f:
+            tokens = json.load(f)
+        access_token = tokens.get("access_token")
+        refresh_token = tokens.get("refresh_token")
+        saved_at = tokens.get("saved_at", 0)
+        expires_in = tokens.get("expires_in", 3600)
+
+        # Refresh if token expired or expiring soon
+        if time.time() - saved_at > (expires_in - 300) and refresh_token:
+            secrets = load_client_secrets()
+            data = {
+                "client_id": secrets["client_id"],
+                "client_secret": secrets["client_secret"],
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token"
+            }
+            resp = requests.post(secrets["token_uri"], data=data)
+            if resp.status_code == 200:
+                new_tokens = resp.json()
+                new_tokens["refresh_token"] = refresh_token
+                save_tokens(new_tokens)
+                return new_tokens.get("access_token")
+        return access_token
+    except Exception:
+        return None
+
+def search_gmail_messages(query: str = "is:unread", max_results: int = 10) -> List[Dict[str, Any]]:
+    token = load_access_token()
+    if not token:
+        return []
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {"q": query, "maxResults": max_results}
+    resp = requests.get("https://gmail.googleapis.com/gmail/v1/users/me/messages", headers=headers, params=params)
+    if resp.status_code != 200:
+        return []
+    data = resp.json()
+    messages = []
+    for m in data.get("messages", []):
+        m_id = m["id"]
+        m_resp = requests.get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{m_id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date", headers=headers)
+        if m_resp.status_code == 200:
+            m_data = m_resp.json()
+            headers_list = m_data.get("payload", {}).get("headers", [])
+            headers_dict = {h["name"]: h["value"] for h in headers_list}
+            messages.append({
+                "id": m_id,
+                "snippet": m_data.get("snippet", ""),
+                "subject": headers_dict.get("Subject", "(No Subject)"),
+                "from": headers_dict.get("From", "Unknown"),
+                "date": headers_dict.get("Date", "")
+            })
+    return messages

@@ -683,7 +683,49 @@ async def generate_mcp_endpoint(request: Request):
     if not prompt:
         return JSONResponse({"error": "Prompt is required"}, status_code=400)
     res = await asyncio.to_thread(skills_mcp_service.generate_mcp_ai, prompt)
-    return res
+@app.get("/auth/google")
+async def auth_google_redirect(request: Request):
+    from services import google_auth_service
+    redirect_uri = str(request.url_for("auth_google_callback"))
+    url = google_auth_service.get_auth_url(redirect_uri=redirect_uri)
+    if not url:
+        return HTMLResponse("<h3>Error: Missing Google OAuth Client Secrets</h3>", status_code=500)
+    return Response(status_code=302, headers={"Location": url})
+
+@app.get("/auth/google/callback")
+async def auth_google_callback(request: Request, code: str = None, error: str = None):
+    from services import google_auth_service
+    if error or not code:
+        return HTMLResponse(f"<h3>Authentication Failed</h3><p>{error or 'No code provided'}</p>", status_code=400)
+    redirect_uri = str(request.url_for("auth_google_callback"))
+    res = google_auth_service.exchange_code_for_tokens(code, redirect_uri=redirect_uri)
+    if not res.get("success"):
+        return HTMLResponse(f"<h3>Token Exchange Failed</h3><p>{res.get('error')}</p>", status_code=400)
+    return HTMLResponse("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Google Workspace Connected</title>
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0a14; color: #fff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; text-align: center; }
+        .card { background: #181826; border: 1px solid #2e2e48; border-radius: 16px; padding: 32px 24px; max-width: 420px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
+        h2 { color: #34d399; margin-top: 0; }
+        p { color: #a1a1aa; line-height: 1.5; font-size: 15px; }
+        .btn { display: inline-block; margin-top: 18px; padding: 10px 20px; background: #7c8cff; color: #0a0a1f; text-decoration: none; border-radius: 10px; font-weight: 600; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h2>✅ Gmail & Workspace Connected</h2>
+        <p>Your Google Workspace credentials and Gmail permissions have been successfully authorized for AgentHub.</p>
+        <p>You can now return to chat and ask the agents to read or summarize your emails.</p>
+        <a href="/" class="btn">Return to AgentHub</a>
+      </div>
+    </body>
+    </html>
+    """)
 
 @app.websocket("/ws/terminal")
 async def websocket_terminal(websocket: WebSocket, cwd: str = "/root"):
