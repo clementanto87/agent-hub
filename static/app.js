@@ -461,42 +461,63 @@ function defaultModelSub(agent, cat) {
   return "Antigravity's default";
 }
 
+let showAllModels = false;
+
+function agentSub(k) {
+  if (!MODEL_AGENTS.includes(k)) return AGENTS[k].desc;
+  const m = currentModel(k);
+  return m ? modelName(k, m) : 'Default model';
+}
+
+function modelOpt(agent, m, sel) {
+  const on = (m ? m.id : null) === (sel || null);
+  return `<button class="model-opt ${on ? 'selected' : ''}" role="radio" aria-checked="${on}" data-pick-model="${m ? esc(m.id) : ''}">
+    <span class="model-name">${esc(m ? (agent === 'claude' ? m.name.replace(/^Claude\s+/, '') : m.name) : 'Default')}</span>
+    <span class="model-hint">${esc(m ? m.id : showAllModels ? defaultModelSub(agent, state.models[agent]) : 'CLI setting')}</span></button>`;
+}
+
 function openAgentSheet() {
   const agent = state.agent;
   const cat = state.models[agent];
   const sel = currentModel(agent);
   const models = (cat && cat.models) || [];
-  const modelSection = MODEL_AGENTS.includes(agent) ? `
-    <div class="sheet-row">
-      <h4>Model</h4>
-      <button class="btn btn-ghost btn-sm" data-refresh-models>${icon('i-refresh', 'xs')}Refresh</button>
-    </div>
-    <div class="sheet-meta">${esc(modelMeta(agent, cat))}</div>
-    <div class="model-list" style="--opt-c:${AGENTS[agent].color}">
-      <button class="opt sm ${!sel ? 'selected' : ''}" data-pick-model="">
-        <span class="opt-main"><span class="opt-title">Default</span><br><span class="opt-sub">${esc(defaultModelSub(agent, cat))}</span></span>
-        <span class="tick">${icon('i-check')}</span>
-      </button>
-      ${models.map((m) => `
-      <button class="opt sm ${m.id === sel ? 'selected' : ''}" data-pick-model="${esc(m.id)}">
-        <span class="opt-main"><span class="opt-title">${esc(m.name)}</span><br><span class="opt-sub mono">${esc(m.id)}</span>${m.description ? `<br><span class="opt-sub">${esc(m.description)}</span>` : ''}</span>
-        <span class="tick">${icon('i-check')}</span>
-      </button>`).join('')}
-    </div>` : '';
+  const a = AGENTS[agent];
+
+  let modelSection = '';
+  if (MODEL_AGENTS.includes(agent)) {
+    // A short pick (default + the first two offered + the current choice); the rest behind "All models".
+    const quick = models.slice(0, 2);
+    const selModel = models.find((m) => m.id === sel);
+    if (selModel && !quick.includes(selModel)) quick.push(selModel);
+    const list = showAllModels ? models : quick;
+    modelSection = `
+      <div class="sheet-row">
+        <h4>${esc(a.name)} model</h4>
+        <button class="btn btn-ghost btn-sm" data-refresh-models>${icon('i-refresh', 'xs')}Refresh</button>
+      </div>
+      <div class="sheet-meta">${esc(modelMeta(agent, cat))}</div>
+      <div class="model-grid ${showAllModels ? 'all' : ''}" role="radiogroup" aria-label="Model" style="--opt-c:${a.color}">
+        ${modelOpt(agent, null, sel)}${list.map((m) => modelOpt(agent, m, sel)).join('')}
+      </div>
+      ${models.length > quick.length ? `<button class="link-btn" data-toggle-all-models>${showAllModels ? 'Show fewer' : `All ${models.length} models`}</button>` : ''}`;
+  }
 
   openSheet(`
-    <h3>Agent &amp; model</h3>
-    <div class="agent-tiles">${Object.entries(AGENTS).map(([k, a]) => `
-      <button class="agent-tile ${k === agent ? 'selected' : ''}" style="--opt-c:${a.color}" data-pick-agent="${k}" aria-pressed="${k === agent}">
-        <span class="opt-ico">${icon(a.icon)}</span><span>${esc(a.name)}</span>
-      </button>`).join('')}
-    </div>
-    <p class="lead">${esc(AGENTS[agent].desc)}</p>
+    <h3>Who should handle this?</h3>
+    <div class="agent-list" role="radiogroup" aria-label="Agent">${AGENT_ORDER.map((k) => {
+      const x = AGENTS[k];
+      const on = k === agent;
+      return `<button class="agent-opt ${on ? 'selected' : ''}" role="radio" aria-checked="${on}" style="--opt-c:${x.color}" data-pick-agent="${k}">
+        <span class="opt-ico">${icon(x.icon)}</span>
+        <span class="opt-main"><span class="opt-title">${esc(x.name)}</span><span class="opt-sub">${esc(agentSub(k))}</span></span>
+        <span class="tick">${icon('i-check')}</span>
+      </button>`;
+    }).join('')}</div>
     ${modelSection}`);
 
   // Keep the list current without making the user wait: refresh quietly if it's been a while.
   if (MODEL_AGENTS.includes(agent) && Date.now() - state.modelsLoadedAt > 10 * 60 * 1000) {
-    loadModels().then((ok) => { if (ok && !$('#sheet').hidden && $('.agent-tiles')) openAgentSheet(); });
+    loadModels().then((ok) => { if (ok && !$('#sheet').hidden && $('.agent-list')) openAgentSheet(); });
   }
 }
 
@@ -800,23 +821,47 @@ async function openGitChangesSheet(fileToDiff = null) {
 }
 
 async function checkGitChanges() {
+  const ws = state.workspace;
+  try {
+    const data = await api(`/api/git/changes?workspace=${encodeURIComponent(ws)}`);
+    state.git = data.is_git && data.files && data.files.length ? { ws, ...data } : null;
+  } catch {
+    state.git = null;
+  }
+  syncGitBar();
+  renderInspector();
+}
+
+function syncGitBar() {
   const btn = $('#gitChangesBtn');
   if (!btn) return;
-  try {
-    const data = await api(`/api/git/changes?workspace=${encodeURIComponent(state.workspace)}`);
-    if (data.is_git && data.files && data.files.length > 0) {
-      btn.hidden = false;
-      const sumEl = $('#gitChangesSummary');
-      if (sumEl) {
-        sumEl.innerHTML = `<span style="color:#4ade80">+${data.total_adds}</span> <span style="color:#f87171">-${data.total_dels}</span>`;
-      }
-    } else {
-      btn.hidden = true;
-    }
-  } catch {
-    btn.hidden = true;
-  }
+  const g = state.git;
+  btn.hidden = !g || chromeMode() !== 'thread';
+  if (!g) return;
+  $('#gitChangesText').textContent = `${g.files.length} file${g.files.length === 1 ? '' : 's'} changed in ${basename(g.ws)}`;
+  $('#gitChangesSummary').innerHTML = `<span class="add">+${g.total_adds}</span><span class="del">−${g.total_dels}</span>`;
 }
+
+const wideScreen = window.matchMedia('(min-width: 1280px)');
+
+// Desktop right-hand panel: the latest reply's steps, uncommitted changes and the workspace.
+function renderInspector() {
+  if (!wideScreen.matches) return;
+  const last = $$('.msg.assistant', threadEl()).pop();
+  const acts = last ? extractAllActivities(last._raw) : [];
+  const live = !!(last && last.classList.contains('streaming'));
+  $('#inspSteps').innerHTML = acts.length
+    ? `<ol class="steps">${acts.slice(-12).map((a, i, arr) => stepLine(a, live && i === arr.length - 1)).join('')}</ol>`
+    : `<span class="muted sm">${live ? 'Starting…' : 'Steps appear here while an agent works.'}</span>`;
+  const g = state.git;
+  $('#inspChangesTitle').innerHTML = g ? `Changes in ${esc(basename(g.ws))} <span class="add">+${g.total_adds}</span> <span class="del">−${g.total_dels}</span>` : 'Changes';
+  $('#inspChanges').innerHTML = g
+    ? g.files.slice(0, 12).map((f) => `<button class="insp-file" data-action="view-file-diff" data-file="${esc(f.path)}"><span class="tag">${esc(f.status.includes('?') ? 'A' : f.status.trim().charAt(0) || 'M')}</span><span class="path">${esc(f.path)}</span>${f.adds ? `<span class="add">+${f.adds}</span>` : ''}</button>`).join('')
+      + (g.files.length > 12 ? `<button class="link-btn" data-action="open-git-changes">All ${g.files.length} files</button>` : '')
+    : '<span class="muted sm">No uncommitted changes.</span>';
+  $('#inspWs').textContent = state.workspace;
+}
+wideScreen.addEventListener?.('change', renderInspector);
 
 async function openWorkspaceSheet(browsePath) {
   if (typeof browsePath === 'string' && browsePath.trim()) {
@@ -988,28 +1033,14 @@ function openQrSheet() {
    Navigation & Side Drawer
    ════════════════════════════════════════════════════════════ */
 
-const TAB_TITLES = { skills: 'Skills & MCP', terminal: 'Terminal', monitor: 'Monitor', history: 'History', settings: 'Settings' };
+const TAB_TITLES = { skills: 'Skills', terminal: 'Terminal', monitor: 'System', history: 'All chats', settings: 'Settings' };
 
-function openNav() {
-  $('#rail')?.classList.add('open');
-  const backdrop = $('#railBackdrop');
-  if (backdrop) backdrop.hidden = false;
-}
-
-function closeNav() {
-  $('#rail')?.classList.remove('open');
-  const backdrop = $('#railBackdrop');
-  if (backdrop) backdrop.hidden = true;
-}
-
-function toggleNav() {
-  const rail = $('#rail');
-  if (rail?.classList.contains('open')) closeNav();
-  else openNav();
-}
+// The rail is a fixed sidebar on desktop only; phones use the bottom tab bar.
+function openNav() {}
+function closeNav() {}
+function toggleNav() {}
 
 function switchTab(tab) {
-  closeNav();
   state.tab = tab;
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${tab}`));
   $$('[data-tab]').forEach((b) => {
@@ -1021,31 +1052,77 @@ function switchTab(tab) {
 
   if (tab === 'skills') loadSkillsAndMcp();
   if (tab === 'terminal') setTimeout(openTerminal, 60);
-  if (tab === 'history') loadSessions();
+  if (tab === 'history') { loadSessions(); setTimeout(() => $('#historySearch')?.focus({ preventScroll: true }), 80); }
   if (tab === 'settings') { refreshSettings(); checkTunnel(); }
   if (tab === 'chat') { state.stick && scrollToBottom(); }
   syncMonitorPolling();
 }
 
+// Home = the Chats tab with no conversation open; thread = a conversation is open.
+function chromeMode() {
+  if (state.tab !== 'chat') return 'tab';
+  return state.messages.length || state.sessionId ? 'thread' : 'home';
+}
+
 function updateTitle() {
-  $('#viewTitle').textContent = state.tab === 'chat' ? (state.title || 'New chat') : (TAB_TITLES[state.tab] || 'AgentHub');
+  const mode = chromeMode();
+  document.body.dataset.mode = mode;
+  $('#view-chat').classList.toggle('is-home', mode === 'home');
+  $('#viewTitle').textContent = mode === 'home' ? 'AgentHub' : mode === 'thread' ? (state.title || 'New chat') : (TAB_TITLES[state.tab] || 'AgentHub');
+  $('#backBtn').hidden = mode !== 'thread';
+  $('#topbarSub').hidden = mode !== 'thread';
+  $('#topbarStatus').hidden = mode !== 'home';
+  $('#tbSearch').hidden = mode !== 'home';
+  $('#tbSettings').hidden = mode === 'thread' || state.tab === 'settings';
+  $('#tbMore').hidden = mode !== 'thread';
+  $$('#tabbar [data-tab="chat"]').forEach((b) => b.classList.toggle('active', state.tab === 'chat' || state.tab === 'history'));
+  updateTopbarSub();
+  setPlaceholder();
+  syncGitBar();
+  renderInspector();
+}
+
+function setPlaceholder() {
+  $('#promptInput').placeholder = state.agent === 'bash' ? 'Run a shell command…'
+    : chromeMode() === 'home' ? 'What should an agent do?' : 'Add a follow-up…';
+}
+
+function updateTopbarSub() {
+  const a = AGENTS[state.agent];
+  const model = MODEL_AGENTS.includes(state.agent) ? currentModel() : null;
+  $('#topbarSubText').textContent = [a.name, model ? modelName(state.agent, model) : '', basename(state.workspace)].filter(Boolean).join(' · ');
 }
 
 /* ════════════════════════════════════════════════════════════
    Agent / workspace selection
    ════════════════════════════════════════════════════════════ */
 
+const AGENT_ORDER = ['auto', 'claude', 'antigravity', 'codex', 'bash'];
+
+// Home composer: one chip per agent plus the workspace. Tapping the selected agent opens the model picker.
+function renderAgentRow() {
+  const row = $('#agentRow');
+  if (!row) return;
+  row.innerHTML = AGENT_ORDER.map((k) => {
+    const a = AGENTS[k];
+    const on = k === state.agent;
+    const model = on && MODEL_AGENTS.includes(k) ? currentModel(k) : null;
+    const label = k === 'claude' ? 'Claude' : a.name;
+    return `<button class="agent-chip ${on ? 'on' : ''}" role="radio" aria-checked="${on}" style="--agent:${a.color}" data-agent-chip="${k}">
+      <span class="dot"></span>${esc(model ? `${label} · ${modelName(k, model)}` : label)}${on && MODEL_AGENTS.includes(k) ? icon('i-chevron-down', 'xs') : ''}</button>`;
+  }).join('') + `<button class="agent-chip ws" data-action="open-workspaces" aria-label="Workspace: ${esc(state.workspace)}">${icon('i-folder', 'xs')}${esc(basename(state.workspace))}</button>`;
+}
+
 function applyAgent() {
   const a = AGENTS[state.agent];
   document.documentElement.style.setProperty('--agent', a.color);
   const model = currentModel();
-  $('#agentChipLabel').textContent = agentLabel(state.agent, model);
-  $('#agentChip').title = model ? `${a.full} · ${model}` : a.full;
   $('#voiceAgent').textContent = model ? agentLabel(state.agent, model) : a.full;
   $('#setAgentSub').textContent = model ? `${a.full} · ${modelName(state.agent, model)}` : `${a.full} · default model`;
-  $('#promptInput').placeholder = state.agent === 'bash' ? 'Run a shell command…' : `Message ${a.name}…`;
+  setPlaceholder();
   store.set('agent', state.agent);
-  if (!state.messages.length) renderEmpty();
+  renderAgentRow();
+  updateTopbarSub();
 }
 
 function setAgent(key) {
@@ -1055,8 +1132,9 @@ function setAgent(key) {
 }
 
 function applyWorkspace() {
-  $('#wsChipLabel').textContent = basename(state.workspace);
   $('#setWsSub').textContent = state.workspace;
+  renderAgentRow();
+  updateTopbarSub();
   store.set('workspace', state.workspace);
   checkGitChanges();
 }
@@ -1096,7 +1174,42 @@ function innerThread() {
 
 function renderEmpty() {
   if (state.messages.length) return;
-  threadEl().innerHTML = '';
+  renderHome();
+}
+
+// The Chats home: what is running now, then recent conversations.
+function renderHome() {
+  if (state.messages.length || state.sessionId) return;
+  const agentOf = (s) => AGENTS[s.agent] || AGENTS.antigravity;
+  const running = state.sessions.filter((s) => state.running.has(s.id));
+  const recent = state.sessions.filter((s) => !state.running.has(s.id)).slice(0, 8);
+  const runCards = running.map((s) => `
+    <button class="run-card" data-open="${esc(s.id)}" style="--agent:${agentOf(s).color}">
+      <span class="run-card-head">
+        <span class="avatar">${icon(agentOf(s).icon)}</span>
+        <span class="run-card-main">
+          <span class="run-card-title">${esc(s.title || 'Untitled')}</span>
+          <span class="run-card-meta">${esc(agentOf(s).name)}${s.workspace ? ` · ${esc(basename(s.workspace))}` : ''}</span>
+        </span>
+      </span>
+      <span class="run-card-live"><span class="live-dot"></span>Working — tap to follow along</span>
+    </button>`).join('');
+  const rows = recent.map((s) => `
+    <button class="chat-row" data-open="${esc(s.id)}">
+      <span class="dot" style="--agent:${agentOf(s).color}"></span>
+      <span class="chat-row-main">
+        <span class="chat-row-title">${esc(s.title || 'Untitled')}</span>
+        <span class="chat-row-meta">${esc(agentOf(s).name)} · ${esc(relTime(s.updated_at))}</span>
+      </span>
+    </button>`).join('');
+  threadEl().innerHTML = `
+    <div class="home">
+      ${running.length ? `<section class="home-sec"><h2>Running now</h2>${runCards}</section>` : ''}
+      <section class="home-sec">
+        <div class="home-sec-head"><h2>Recent</h2>${state.sessions.length ? '<button class="link-btn" data-tab="history">All chats</button>' : ''}</div>
+        ${rows || `<p class="home-empty">${state.sessionsLoaded ? 'No conversations yet. Describe a task above and pick an agent.' : 'Loading conversations…'}</p>`}
+      </section>
+    </div>`;
 }
 
 const TAG_PARTIAL_RE = /^\s*(?:🚀|🟣|🟢|🔷|⚙️)(?:\s*\*(?:\[[^\n\]]*)?)?\s*$/u;
@@ -1227,24 +1340,28 @@ function renderBody(msgEl, final = false) {
   const body = $('.msg-body', msgEl);
   if (!body) return;
 
-  const currentActivity = !final ? extractActivity(msgEl._raw) : null;
-  let activityHtml = '';
-  if (!final && currentActivity && (currentActivity.label || currentActivity.detail)) {
-    activityHtml = `
-      <div class="live-activity-bar">
-        <span class="live-pulse"></span>
-        <span class="live-icon">${esc(currentActivity.icon || '⚡')}</span>
-        <span class="live-text">
-          <b>${esc(currentActivity.label)}${currentActivity.detail ? ':' : ''}</b>
-          ${currentActivity.detail ? `<code>${esc(currentActivity.detail)}</code>` : ''}
-        </span>
-      </div>
-    `;
-  }
-
-  body.innerHTML = (text ? mdToHtml(text) : '') + activityHtml;
+  const activityHtml = stepsHtml(msgEl, final);
+  body.innerHTML = activityHtml + (text ? mdToHtml(text) : '');
   enhanceMarkdown(body, final);
   if (agent && msgEl._agentKey === 'auto') setMsgAgent(msgEl, agent, true);
+}
+
+function stepLine(act, live) {
+  return `<li class="step ${live ? 'live' : ''}"><span class="step-dot"></span><span class="step-label">${esc(act.label || 'Working')}</span>${act.detail ? `<code class="step-detail">${esc(act.detail)}</code>` : ''}</li>`;
+}
+
+// What the agent did, from the ACTIVITY markers in its output: a live list while it runs,
+// then one collapsed "Worked … · N steps" line.
+function stepsHtml(msgEl, final) {
+  const acts = extractAllActivities(msgEl._raw);
+  if (!acts.length) return '';
+  if (!final) {
+    const shown = acts.slice(-5);
+    const hidden = acts.length - shown.length;
+    return `<ol class="steps">${hidden > 0 ? `<li class="step more">${hidden} earlier step${hidden === 1 ? '' : 's'}</li>` : ''}${shown.map((a, i) => stepLine(a, i === shown.length - 1)).join('')}</ol>`;
+  }
+  const took = msgEl._elapsed ? `Worked ${fmtDuration(msgEl._elapsed)} · ` : '';
+  return `<details class="run-summary"><summary>${icon('i-check', 'xs')}<span>${took}${acts.length} step${acts.length === 1 ? '' : 's'}</span>${icon('i-chevron-down', 'xs')}</summary><ol class="steps">${acts.map((a) => stepLine(a, false)).join('')}</ol></details>`;
 }
 
 function setMsgAgent(msgEl, key, routed = false) {
@@ -1292,7 +1409,7 @@ function addAssistantMessage({ content = '', agent, ts, streaming = false, model
   el.innerHTML = `
     <div class="msg-head">
       <span class="avatar"></span><span class="msg-name"></span>
-      ${streaming ? '<span class="status-pill"><span class="live-time">Working</span></span>' : ''}
+      ${streaming ? '<span class="status-pill">working</span>' : ''}
       <div class="msg-meta-right">
         <span class="msg-tokens" ${tokCount ? '' : 'hidden'} title="${esc(tokTitle)}">${icon('i-zap', 'xs')}<span class="tok-num">${esc(tokFmt)}</span></span>
         <span class="msg-time">${streaming ? '' : clock(ts)}</span>
@@ -1350,20 +1467,20 @@ function onThreadScroll() {
 
 function setStreaming(on) {
   state.streaming = on;
-  const b = $('#sendBtn');
-  b.classList.toggle('stop', on);
-  b.innerHTML = icon(on ? 'i-stop' : 'i-send');
-  b.setAttribute('aria-label', on ? 'Stop' : 'Send');
-  b.disabled = false;
   updateSendEnabled();
 }
 
+// One primary button: Stop while an agent works, Send when there is something to send, otherwise Talk.
 function updateSendEnabled() {
-  if (state.streaming) return;
-  const hasPrompt = !!$('#promptInput')?.value.trim();
-  const hasAttachments = !!(state.attachments && state.attachments.length);
   const btn = $('#sendBtn');
-  if (btn) btn.disabled = !hasPrompt && !hasAttachments;
+  if (!btn) return;
+  const hasInput = !!$('#promptInput')?.value.trim() || !!(state.attachments && state.attachments.length);
+  const mode = state.streaming ? 'stop' : hasInput ? 'send' : 'talk';
+  if (btn.dataset.mode === mode) return;
+  btn.dataset.mode = mode;
+  btn.disabled = false;
+  btn.setAttribute('aria-label', { stop: 'Stop agent', send: 'Send', talk: 'Talk to the agent' }[mode]);
+  btn.innerHTML = icon({ stop: 'i-stop', send: 'i-send', talk: 'i-wave' }[mode]) + (mode === 'talk' ? '<span class="primary-label">Talk</span>' : '');
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1424,19 +1541,8 @@ async function drive(el, agentKey, open, { newTitle = '' } = {}) {
   const started = Date.now();
   const pill = $('.status-pill', el);
   const updatePill = () => {
-    if (!pill) return;
-    const elapsed = Math.floor((Date.now() - started) / 1000);
-    const timeStr = el._reconnecting ? 'Reconnecting…' : `Working · ${elapsed}s`;
-    const curAct = extractActivity(el._raw);
-
-    if (curAct && (curAct.label || curAct.detail)) {
-      const iconStr = curAct.icon ? `<span class="live-op-icon">${esc(curAct.icon)}</span>` : '';
-      const labelStr = curAct.label ? `<span class="live-op-label">${esc(curAct.label)}${curAct.detail ? ':' : ''}</span>` : '';
-      const detailStr = curAct.detail ? `<span class="live-op-detail">${esc(curAct.detail)}</span>` : '';
-      pill.innerHTML = `<span class="live-time">${timeStr}</span><span class="live-sep">·</span><span class="live-op" title="${esc(curAct.label + (curAct.detail ? ': ' + curAct.detail : ''))}">${iconStr}${labelStr}${detailStr}</span>`;
-    } else {
-      pill.innerHTML = `<span class="live-time">${timeStr}</span>`;
-    }
+    el._elapsed = Math.floor((Date.now() - started) / 1000);
+    if (pill) pill.textContent = el._reconnecting ? 'reconnecting…' : `working ${fmtDuration(el._elapsed)}`;
   };
   const tick = setInterval(updatePill, 800);
 
@@ -1470,6 +1576,7 @@ async function drive(el, agentKey, open, { newTitle = '' } = {}) {
         if (replyEl) replyEl.textContent = spoken.display;
       }
       updateStreamingTokens();
+      renderInspector();
       scrollToBottom();
     });
   };
@@ -1478,6 +1585,7 @@ async function drive(el, agentKey, open, { newTitle = '' } = {}) {
   clearInterval(tick);
   cancelAnimationFrame(frame);
   state.abort = null;
+  el._elapsed = Math.floor((Date.now() - started) / 1000);
 
   if (epoch !== state.epoch) {            // the user moved to another conversation; the run continues server-side
     setStreaming(false);
@@ -1516,7 +1624,9 @@ async function drive(el, agentKey, open, { newTitle = '' } = {}) {
   }
   checkGitChanges();
 
-  if (newTitle && state.sessionId) { state.title = newTitle; updateTitle(); }
+  if (newTitle && state.sessionId) state.title = newTitle;
+  if (state.sessionId) sessionStorage.setItem('ah.open', state.sessionId);
+  updateTitle();
   loadSessions(true);
   return { text: el._raw, stopped: !!stopped, failed };
 }
@@ -1556,6 +1666,7 @@ async function send(textArg, opts = {}) {
   const userTokens = Math.max(1, Math.round(enrichedPrompt.length / 3.8));
   state.messages.push({ role: 'user', content: userText, agent: agentKey, ts: now, attachments, tokens: userTokens });
   addUserMessage(userText, now, attachments);
+  updateTitle();
 
   const model = agentKey === 'bash' || agentKey === 'auto' ? null : currentModel(agentKey);
   const el = addAssistantMessage({ agent: agentKey, streaming: true, model });
@@ -1587,8 +1698,9 @@ function retryLast() {
   if (lastUser) send(lastUser.content);
 }
 
-function newChat() {
+function newChat({ focus = true } = {}) {
   if (state.streaming) detachStreaming();
+  sessionStorage.removeItem('ah.open');
   state.epoch++;
   state.sessionId = null;
   state.title = '';
@@ -1599,7 +1711,7 @@ function newChat() {
   renderEmpty();
   updateTitle();
   switchTab('chat');
-  $('#promptInput').focus();
+  if (focus) $('#promptInput').focus();
   renderRail();
 }
 
@@ -1623,6 +1735,7 @@ async function openSession(id) {
       ts: m.timestamp
     }));
     store.set('session', data.id);
+    sessionStorage.setItem('ah.open', data.id);
     if (AGENTS[data.agent]) setAgent(data.agent);
     if (data.workspace) { state.workspace = data.workspace; applyWorkspace(); }
 
@@ -2280,8 +2393,8 @@ function termFontDelta(d) {
    Monitor
    ════════════════════════════════════════════════════════════ */
 
-const hist = { cpu: [], mem: [] };
 let monTimer = null;
+let showAllProcs = false;
 
 function syncMonitorPolling() {
   const want = state.tab === 'monitor' && !document.hidden;
@@ -2289,121 +2402,54 @@ function syncMonitorPolling() {
   if (!want && monTimer) { clearInterval(monTimer); monTimer = null; }
 }
 
+const levelCls = (pct) => (pct >= 90 ? 'bad' : pct >= 75 ? 'warn' : '');
+
 function setGauge(id, pct, val, sub) {
   const g = $(id);
-  const fg = $('.ring-fg', g);
-  fg.style.strokeDasharray = `${Math.max(0, Math.min(100, pct))} 100`;
-  fg.classList.toggle('warn', pct >= 75 && pct < 90);
-  fg.classList.toggle('bad', pct >= 90);
-  $('.gauge-val', g).textContent = val;
+  const fill = $('.bar-fill', g);
+  fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+  fill.className = `bar-fill ${levelCls(pct)}`;
+  const v = $('.gauge-val', g);
+  v.textContent = val;
+  v.className = `res-val gauge-val ${levelCls(pct)}`;
   const s = $('.gauge-sub', g); if (s && sub !== undefined) s.textContent = sub;
 }
 
-function setSpark(id, arr) {
-  const pl = $('.spark polyline', $(id));
-  if (!pl) return;
-  const n = arr.length;
-  pl.setAttribute('points', arr.map((v, i) => `${n > 1 ? (i * 100) / (n - 1) : 0},${(23 - (Math.min(100, v) / 100) * 21).toFixed(1)}`).join(' '));
+function setUsageBar(fillId, pct) {
+  const f = $(fillId);
+  if (!f) return;
+  f.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+  f.className = `bar-fill ${levelCls(pct)}`;
 }
 
 async function pollUsage() {
   try {
     const b5h = state.prefs.fiveHourBudget || 200000;
     const bwk = state.prefs.weeklyBudget || 1500000;
-    const curAgent = state.usageAgent || 'all';
-    const u = await api(`/api/usage?five_hour_budget=${encodeURIComponent(b5h)}&weekly_budget=${encodeURIComponent(bwk)}&agent=${encodeURIComponent(curAgent)}`);
-    if (!u) return;
-
-    const w5 = u.window_5h;
-    const w7 = u.window_7d;
-    const w24 = u.window_24h;
-
-    // Dynamic badge labels
-    const badge5Label = curAgent === 'claude' ? 'Claude 5-Hour Limit' :
-      (curAgent === 'antigravity' ? 'Antigravity 5h Window' :
-      (curAgent === 'codex' ? 'Codex 5h Window' : '5-Hour Rolling Window'));
-    const badge5El = $('.usage-badge.rolling');
-    if (badge5El) badge5El.textContent = badge5Label;
-
-    const badge7Label = curAgent === 'all' ? 'Weekly Quota (7 Days)' : `${AGENTS[curAgent]?.name || curAgent} Weekly Quota (7 Days)`;
-    const badge7El = $('.usage-badge.weekly');
-    if (badge7El) badge7El.textContent = badge7Label;
-
-    // 1. Render 5-Hour Rolling Card
-    const u5hUsedEl = $('#u5hUsed');
-    if (u5hUsedEl && w5) {
-      u5hUsedEl.textContent = `~${formatTokens(w5.tokens_used)} tok`;
-      const pill = $('#u5hStatusPill');
-      if (pill) {
-        pill.textContent = w5.status;
-        pill.className = `usage-status-pill ${w5.status}`;
-      }
-      const fill = $('#u5hBarFill');
-      if (fill) {
-        fill.style.width = `${Math.min(100, Math.max(0, w5.percent_used))}%`;
-        fill.className = `quota-bar-fill ${w5.percent_used >= 90 ? 'danger' : (w5.percent_used >= 75 ? 'warn' : '')}`;
-      }
-      if ($('#u5hRemaining')) $('#u5hRemaining').textContent = `~${formatTokens(w5.tokens_remaining)}`;
-      if ($('#u5hPct')) $('#u5hPct').textContent = `${w5.percent_used}% of ${formatTokens(w5.tokens_budget)} limit`;
-      if ($('#u5hReset')) $('#u5hReset').textContent = w5.next_reset_formatted === 'Idle' ? 'No active queue' : `In ${w5.next_reset_formatted}`;
-      if ($('#u5hMsgs')) $('#u5hMsgs').textContent = String(w5.messages_count);
-      if ($('#u24hUsed')) $('#u24hUsed').textContent = `~${formatTokens(w24?.tokens_used || 0)} tok`;
-
-      // 5h Agent distribution chips
-      const entries5 = Object.entries(w5.by_agent || {});
-      const aChips = entries5.map(([k, stat]) => {
+    const u = await api(`/api/usage?five_hour_budget=${encodeURIComponent(b5h)}&weekly_budget=${encodeURIComponent(bwk)}&agent=all`);
+    const w5 = u && u.window_5h;
+    const w7 = u && u.window_7d;
+    if (w5) {
+      $('#u5hUsed').textContent = `~${formatTokens(w5.tokens_used)}`;
+      $('#u5hPct').textContent = `${w5.percent_used}% of ${formatTokens(w5.tokens_budget)}`;
+      setUsageBar('#u5hBarFill', w5.percent_used);
+      $('#u5hReset').textContent = w5.next_reset_formatted && w5.next_reset_formatted !== 'Idle' ? `Oldest usage leaves the 5-hour window in ${w5.next_reset_formatted}` : '';
+      const entries = Object.entries(w5.by_agent || {}).sort((x, y) => y[1].tokens - x[1].tokens);
+      const max = Math.max(1, ...entries.map(([, st]) => st.tokens));
+      $('#u5hAgentChips').innerHTML = entries.length ? entries.map(([k, st]) => {
         const ag = AGENTS[k];
-        const iconHtml = ag ? icon(ag.icon, 'xs') : '🤖';
-        const name = ag ? ag.name : k;
-        return `<span class="agent-chip-stat">${iconHtml} <span>${esc(name)}</span> <span class="tok-cnt">~${formatTokens(stat.tokens)}</span></span>`;
-      }).join('');
-      if ($('#u5hAgentChips')) $('#u5hAgentChips').innerHTML = aChips || '<span class="muted sm">No activity in last 5 hours</span>';
+        return `<div class="usage-agent" style="--agent:${ag ? ag.color : 'var(--text-3)'}">
+          <span class="ua-name">${esc(ag ? ag.name : k)}</span>
+          <span class="bar"><span class="bar-fill agent" style="width:${Math.max(3, Math.round((st.tokens / max) * 100))}%"></span></span>
+          <span class="ua-val">~${formatTokens(st.tokens)}</span></div>`;
+      }).join('') : '<span class="muted sm">No agent activity in the last 5 hours.</span>';
     }
-
-    // 2. Render Weekly (7-Day) Card
-    const u7dUsedEl = $('#u7dUsed');
-    if (u7dUsedEl && w7) {
-      u7dUsedEl.textContent = `~${formatTokens(w7.tokens_used)} tok`;
-      const pill7 = $('#u7dStatusPill');
-      if (pill7) {
-        pill7.textContent = w7.status;
-        pill7.className = `usage-status-pill ${w7.status}`;
-      }
-      const fill7 = $('#u7dBarFill');
-      if (fill7) {
-        fill7.style.width = `${Math.min(100, Math.max(0, w7.percent_used))}%`;
-        fill7.className = `quota-bar-fill weekly ${w7.percent_used >= 90 ? 'danger' : (w7.percent_used >= 75 ? 'warn' : '')}`;
-      }
-      if ($('#u7dRemaining')) $('#u7dRemaining').textContent = `~${formatTokens(w7.tokens_remaining)}`;
-      if ($('#u7dPct')) $('#u7dPct').textContent = `${w7.percent_used}% of ${formatTokens(w7.tokens_budget)} limit`;
-
-      // Weekly 7-day sparkbars
-      const maxDaily = Math.max(1, ...(w7.daily || []).map(d => (d.tokens > 0 ? d.tokens : d.messages * 50)));
-      const isToday = (idx, total) => idx === total - 1;
-      const sparkHtml = (w7.daily || []).map((d, i, arr) => {
-        const val = d.tokens > 0 ? d.tokens : (d.messages > 0 ? d.messages * 50 : 0);
-        const hPct = val > 0 ? Math.max(8, Math.round((val / maxDaily) * 100)) : 4;
-        const todayCls = isToday(i, arr.length) ? 'today' : '';
-        const title = `${d.date} (${d.day}): ~${formatTokens(d.tokens)} tok · ${d.messages} msgs`;
-        return `
-        <div class="sparkbar-col ${todayCls}" title="${esc(title)}">
-          <div class="sparkbar-fill" style="height: ${hPct}%;"></div>
-          <span class="sparkbar-label">${d.day}</span>
-        </div>`;
-      }).join('');
-      if ($('#u7dSparkbars')) $('#u7dSparkbars').innerHTML = sparkHtml;
-
-      // Weekly Agent distribution chips
-      const entries7 = Object.entries(w7.by_agent || {});
-      const aChips7 = entries7.map(([k, stat]) => {
-        const ag = AGENTS[k];
-        const iconHtml = ag ? icon(ag.icon, 'xs') : '🤖';
-        const name = ag ? ag.name : k;
-        return `<span class="agent-chip-stat">${iconHtml} <span>${esc(name)}</span> <span class="tok-cnt">~${formatTokens(stat.tokens)}</span></span>`;
-      }).join('');
-      if ($('#u7dAgentChips')) $('#u7dAgentChips').innerHTML = aChips7 || '<span class="muted sm">No weekly activity recorded</span>';
+    if (w7) {
+      $('#u7dUsed').textContent = `~${formatTokens(w7.tokens_used)}`;
+      $('#u7dPct').textContent = `${w7.percent_used}% of ${formatTokens(w7.tokens_budget)}`;
+      setUsageBar('#u7dBarFill', w7.percent_used);
     }
-  } catch (e) {
+  } catch {
     /* ignore usage poll error */
   }
 }
@@ -2412,13 +2458,11 @@ async function pollSystem() {
   try {
     const d = await api('/api/system');
     setGauge('#gCpu', d.cpu_percent, `${Math.round(d.cpu_percent)}%`);
-    setGauge('#gMem', d.memory_percent, `${Math.round(d.memory_percent)}%`, `${d.memory_used_gb.toFixed(1)} / ${d.memory_total_gb.toFixed(1)} GB`);
+    setGauge('#gMem', d.memory_percent, `${Math.round(d.memory_percent)}%`, `${d.memory_used_gb.toFixed(1)} of ${d.memory_total_gb.toFixed(1)} GB`);
     setGauge('#gDisk', d.disk_percent, `${Math.round(d.disk_percent)}%`, `${Math.round(d.disk_free_gb)} GB free of ${Math.round(d.disk_total_gb)} GB`);
-    hist.cpu.push(d.cpu_percent); hist.mem.push(d.memory_percent);
-    if (hist.cpu.length > 40) { hist.cpu.shift(); hist.mem.shift(); }
-    setSpark('#gCpu', hist.cpu); setSpark('#gMem', hist.mem);
     $('#monUptime').textContent = `Up ${d.uptime_formatted}`;
-    renderProcesses(d.agent_processes || []);
+    state.procs = d.agent_processes || [];
+    renderProcesses(state.procs);
   } catch {
     $('#monUptime').textContent = 'Offline';
   }
@@ -2432,20 +2476,32 @@ function fmtDuration(s) {
   return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
 }
 
+// Agent CLIs first, helper processes (servers, daemons) behind "Show all".
+function procColor(type) {
+  const t = (type || '').toLowerCase();
+  if (t.includes('antigravity') || t.includes('agy')) return AGENTS.antigravity.color;
+  if (t.includes('claude')) return AGENTS.claude.color;
+  if (t.includes('codex')) return AGENTS.codex.color;
+  return 'var(--text-3)';
+}
+
 function renderProcesses(list) {
   $('#procCount').textContent = list.length ? `${list.length} running` : '';
-  $('#processList').innerHTML = list.length ? list.map((p) => {
+  const shown = showAllProcs ? list : list.slice(0, 5);
+  $('#processList').innerHTML = list.length ? shown.map((p) => {
     const self = p.agent_type === 'AgentHub Server';
     return `
     <div class="proc">
+      <span class="dot" style="--agent:${procColor(p.agent_type)}"></span>
       <div class="proc-main">
         <div class="proc-name">${esc(p.agent_type)} <span class="proc-pid">#${p.pid}</span></div>
-        <div class="proc-cmd">${esc(p.cmd)}</div>
-        <div class="proc-meta">CPU ${p.cpu}% · RAM ${p.memory}% · up ${fmtDuration(p.running_sec)}</div>
+        <div class="proc-cmd" title="${esc(p.cmd)}">${esc(p.cmd)}</div>
       </div>
-      ${self ? '<span class="muted sm">this server</span>' : `<button class="btn btn-danger btn-sm" data-kill="${p.pid}" data-kill-name="${esc(p.agent_type)}">Stop</button>`}
+      <div class="proc-meta">${p.cpu}% CPU<br>${p.memory}% RAM · ${fmtDuration(p.running_sec)}</div>
+      ${self ? '<span class="proc-self">this app</span>' : `<button class="icon-btn" data-kill="${p.pid}" data-kill-name="${esc(p.agent_type)}" aria-label="Stop ${esc(p.agent_type)}">${icon('i-more')}</button>`}
     </div>`;
-  }).join('') : '<div class="empty-inline">No agent processes running.</div>';
+  }).join('') + (list.length > 5 ? `<button class="link-btn row-more" data-toggle-procs>${showAllProcs ? 'Show fewer' : `Show all ${list.length}`}</button>` : '')
+    : '<div class="empty-inline">No agent processes running.</div>';
 }
 
 async function killProcess(pid, name) {
@@ -2471,12 +2527,14 @@ async function loadSessions(quiet = false) {
     state.sessions = sessions;
     state.running = new Set(runs.map((r) => r.session_id));
     state.sessionsLoaded = true;
+    updateHomeStatus();
   } catch {
     if (!state.sessionsLoaded) $('#sessionList').innerHTML = '<div class="empty-inline">Could not load conversations.</div>';
     return;
   }
   renderHistory();
   renderRail();
+  if (chromeMode() === 'home') renderHome();
 }
 
 function renderHistory() {
@@ -2507,11 +2565,15 @@ function renderHistory() {
 function renderRail() {
   const el = $('#railRecent');
   if (!el) return;
-  const items = state.sessions.slice(0, 14);
-  el.innerHTML = items.length ? items.map((s) => `
+  const row = (s) => `
     <button class="rail-item ${s.id === state.sessionId ? 'current' : ''}" data-open="${esc(s.id)}">
       <span class="dot ${state.running.has(s.id) ? 'live' : ''}" style="--agent:${(AGENTS[s.agent] || AGENTS.antigravity).color}"></span><span>${esc(s.title || 'Untitled')}</span>
-    </button>`).join('') : '<div class="rail-empty">No conversations yet</div>';
+    </button>`;
+  const running = state.sessions.filter((s) => state.running.has(s.id));
+  const recent = state.sessions.filter((s) => !state.running.has(s.id)).slice(0, 14);
+  el.innerHTML = (running.length ? `<div class="rail-section-title">Running</div>${running.map(row).join('')}` : '')
+    + `<div class="rail-section-title">Recent</div>`
+    + (recent.length ? recent.map(row).join('') : '<div class="rail-empty">No conversations yet</div>');
 }
 
 async function deleteSession(id) {
@@ -2528,6 +2590,7 @@ async function deleteSession(id) {
 function newChatSilently() {
   state.sessionId = null; state.title = ''; state.messages = [];
   store.set('session', null);
+  sessionStorage.removeItem('ah.open');
   renderEmpty(); updateTitle();
 }
 
@@ -2587,8 +2650,17 @@ async function toggleTunnel() {
 }
 
 function setConn(ok) {
+  state.online = ok;
   $('#connDot').className = `conn-dot ${ok ? 'ok' : 'bad'}`;
   $('#connText').textContent = ok ? 'Connected to VM' : 'Offline';
+  updateHomeStatus();
+}
+
+function updateHomeStatus() {
+  const n = state.running.size;
+  $('#homeConnDot').className = `conn-dot ${state.online === false ? 'bad' : state.online ? 'ok' : ''}`;
+  $('#homeConnText').textContent = state.online === false ? 'VM offline'
+    : `Connected${n ? ` · ${n} task${n === 1 ? '' : 's'} running` : ''}`;
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -2626,6 +2698,7 @@ async function loadMcp() {
 }
 
 function renderSkills() {
+  if ($('#skillsCount')) $('#skillsCount').textContent = allSkills.length || '';
   const query = ($('#skillsSearch')?.value || '').toLowerCase().trim();
   const listEl = $('#skillsList');
   if (!listEl) return;
@@ -2641,27 +2714,18 @@ function renderSkills() {
   }
 
   listEl.innerHTML = filtered.map((s) => `
-    <div class="skill-card" data-skill="${esc(s.name)}">
-      <div class="skill-card-head">
-        <span class="skill-card-title">
-          <span>🧩</span>
-          <span>${esc(s.name)}</span>
-        </span>
-        <span class="skill-badge ${s.is_builtin ? 'builtin' : 'custom'}">${esc(s.category || (s.is_builtin ? 'Built-in' : 'Custom'))}</span>
-      </div>
-      <div class="skill-desc">${esc(s.description || 'No description provided')}</div>
-      <div class="skill-foot">
-        <span>Scope: ${esc(s.agent_scope || 'global')}</span>
-        <div class="skill-foot-actions">
-          <button class="btn btn-ghost btn-sm" data-action="view-skill" data-name="${esc(s.name)}">View / Edit</button>
-          ${s.is_builtin ? '' : `<button class="btn btn-ghost btn-sm" style="color:var(--danger);" data-action="delete-skill" data-name="${esc(s.name)}">Delete</button>`}
-        </div>
-      </div>
-    </div>
-  `).join('');
+    <button class="item-row" data-action="view-skill" data-name="${esc(s.name)}">
+      <span class="item-ico">${icon('i-box')}</span>
+      <span class="item-main">
+        <span class="item-title"><span class="mono">${esc(s.name)}</span><span class="tag">${esc(s.is_builtin ? 'built-in' : (s.agent_scope || 'global'))}</span></span>
+        <span class="item-desc">${esc(s.description || 'No description provided')}</span>
+      </span>
+      ${icon('i-chevron', 'xs muted')}
+    </button>`).join('');
 }
 
 function renderMcp() {
+  if ($('#mcpCount')) $('#mcpCount').textContent = allMcpServers.length || '';
   const query = ($('#mcpSearch')?.value || '').toLowerCase().trim();
   const listEl = $('#mcpList');
   if (!listEl) return;
@@ -2677,28 +2741,15 @@ function renderMcp() {
   }
 
   listEl.innerHTML = filtered.map((m) => `
-    <div class="mcp-card">
-      <div class="mcp-head">
-        <span class="mcp-title">
-          <span style="color:var(--ok); font-size:11px;">●</span>
-          <span>${esc(m.name)}</span>
-        </span>
-        <span class="skill-badge custom">${esc(m.type || 'stdio')}</span>
-      </div>
-      <div class="mcp-cmd">${esc(m.command || m.url || '')} ${(m.args || []).join(' ')}</div>
-      ${m.tools && m.tools.length ? `
-        <div class="mcp-tools">
-          ${m.tools.map((t) => `<span class="mcp-tool-tag">${esc(t)}</span>`).join('')}
-        </div>
-      ` : ''}
-      <div class="skill-foot">
-        <span>Agents: ${(m.agents || ['claude', 'antigravity']).join(', ')}</span>
-        <div class="skill-foot-actions">
-          <button class="btn btn-ghost btn-sm" style="color:var(--danger);" data-action="delete-mcp" data-name="${esc(m.name)}">Remove</button>
-        </div>
-      </div>
-    </div>
-  `).join('');
+    <div class="item-row">
+      <span class="item-ico">${icon('i-link')}</span>
+      <span class="item-main">
+        <span class="item-title"><span class="mono">${esc(m.name)}</span><span class="tag">${esc(m.type || 'stdio')}</span></span>
+        <span class="item-desc mono">${esc(m.command || m.url || '')} ${esc((m.args || []).join(' '))}</span>
+        <span class="item-meta">${esc((m.agents || ['claude', 'antigravity']).map((k) => (AGENTS[k] || { name: k }).name).join(', '))}${m.tools && m.tools.length ? ` · ${m.tools.length} tools` : ''}</span>
+      </span>
+      <button class="icon-btn" data-action="delete-mcp" data-name="${esc(m.name)}" aria-label="Remove ${esc(m.name)}">${icon('i-trash')}</button>
+    </div>`).join('');
 }
 
 function switchSkillsPanel(panel) {
@@ -2707,10 +2758,11 @@ function switchSkillsPanel(panel) {
   $('#panelMcp').hidden = panel !== 'mcp';
   $$('#skillsTabToggle button').forEach((b) => {
     b.classList.toggle('active', b.dataset.panel === panel);
+    b.setAttribute('aria-selected', String(b.dataset.panel === panel));
   });
 }
 
-function openSkillCreator({ name = '', description = '', content = '', agent_scope = 'global' } = {}) {
+function openSkillCreator({ name = '', description = '', content = '', agent_scope = 'global', is_builtin = false } = {}) {
   openSheet(`
     <h3>${name ? 'Edit Skill' : 'Create New Skill'}</h3>
     <div class="stack" style="gap:10px; margin-top:10px;">
@@ -2738,8 +2790,9 @@ function openSkillCreator({ name = '', description = '', content = '', agent_sco
     </div>
     <div class="sheet-actions" style="margin-top:14px;">
       <button class="btn" data-sheet="cancel">Cancel</button>
-      <button class="btn btn-primary" id="saveSkillBtn">Save Skill</button>
+      <button class="btn btn-primary" id="saveSkillBtn">Save skill</button>
     </div>
+    ${name && !is_builtin ? `<button class="btn btn-ghost btn-sm danger-link" data-action="delete-skill" data-name="${esc(name)}">${icon('i-trash', 'xs')}Delete this skill</button>` : ''}
   `, (body) => {
     $('#saveSkillBtn', body)?.addEventListener('click', async () => {
       const sName = $('#skillInputName', body).value.trim();
@@ -2761,7 +2814,7 @@ function openSkillCreator({ name = '', description = '', content = '', agent_sco
 
 function openSkillAiGenerator() {
   openSheet(`
-    <h3>✨ Generate Skill with AI</h3>
+    <h3>Generate a skill with AI</h3>
     <p class="lead">Describe what you want the skill to do. The AI will draft the instructions, triggers, and best practices.</p>
     <textarea class="composer-input" id="skillGenPrompt" rows="3" style="border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:8px;" placeholder="e.g. Skill for inspecting PostgreSQL databases, running migrations, and checking table schemas"></textarea>
     <div class="sheet-actions" style="margin-top:14px;">
@@ -2846,7 +2899,7 @@ function openMcpCreator({ name = '', command = '', args = [], env = {} } = {}) {
 
 function openMcpAiGenerator() {
   openSheet(`
-    <h3>✨ Configure MCP with AI</h3>
+    <h3>Configure an MCP server with AI</h3>
     <p class="lead">Describe the database, API, or service you want to connect via MCP.</p>
     <textarea class="composer-input" id="mcpGenPrompt" rows="3" style="border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:8px;" placeholder="e.g. SQLite database at /root/data/app.db"></textarea>
     <div class="sheet-actions" style="margin-top:14px;">
@@ -2872,6 +2925,19 @@ function openMcpAiGenerator() {
   });
 }
 
+function openChatMenu() {
+  const g = state.git;
+  openSheet(`
+    <h3>${esc(state.title || 'This conversation')}</h3>
+    <div>
+      <button class="opt" data-action="open-agents"><span class="opt-ico">${icon(AGENTS[state.agent].icon)}</span><span class="opt-main"><span class="opt-title">Agent &amp; model</span><br><span class="opt-sub">${esc(agentLabel(state.agent, currentModel()))}</span></span></button>
+      <button class="opt" data-action="open-workspaces"><span class="opt-ico">${icon('i-folder')}</span><span class="opt-main"><span class="opt-title">Workspace</span><br><span class="opt-sub mono">${esc(state.workspace)}</span></span></button>
+      ${g ? `<button class="opt" data-action="open-git-changes"><span class="opt-ico">${icon('i-git')}</span><span class="opt-main"><span class="opt-title">Code changes</span><br><span class="opt-sub">${g.files.length} files · +${g.total_adds} −${g.total_dels}</span></span></button>` : ''}
+      <button class="opt" data-action="open-qr"><span class="opt-ico">${icon('i-qr')}</span><span class="opt-main"><span class="opt-title">Open on phone</span><br><span class="opt-sub">Show a QR code for this app</span></span></button>
+      ${state.sessionId ? `<button class="opt danger" data-del="${esc(state.sessionId)}"><span class="opt-ico">${icon('i-trash')}</span><span class="opt-main"><span class="opt-title">Delete conversation</span></span></button>` : ''}
+    </div>`);
+}
+
 /* ════════════════════════════════════════════════════════════
    Event wiring
    ════════════════════════════════════════════════════════════ */
@@ -2881,6 +2947,15 @@ const actions = {
   'open-nav': openNav,
   'close-nav': closeNav,
   'new-chat': newChat,
+  'go-home': () => newChat({ focus: false }),
+  'open-chat-menu': openChatMenu,
+  'open-create-menu': () => {
+    const mcp = skillsPanelActive === 'mcp';
+    openSheet(`
+      <h3>${mcp ? 'Add an MCP server' : 'New skill'}</h3>
+      <button class="opt" data-action="${mcp ? 'open-mcp-create' : 'open-skill-create'}"><span class="opt-ico">${icon('i-file-code')}</span><span class="opt-main"><span class="opt-title">Write it yourself</span><br><span class="opt-sub">${mcp ? 'Command, arguments and environment' : 'Name, trigger and instructions in Markdown'}</span></span></button>
+      <button class="opt" data-action="${mcp ? 'open-mcp-gen' : 'open-skill-gen'}"><span class="opt-ico">${icon('i-sparkle')}</span><span class="opt-main"><span class="opt-title">Describe it, an agent drafts it</span><br><span class="opt-sub">You review before saving</span></span></button>`);
+  },
   'open-agents': openAgentSheet,
   'open-workspaces': () => openWorkspaceSheet(state.workspace || '/root'),
   'open-git-changes': () => openGitChangesSheet(),
@@ -2891,7 +2966,12 @@ const actions = {
   'pick-device-file': () => { closeSheet(); $('#mediaFileInput')?.click(); },
   'pick-vm-file': () => { closeSheet(); openWorkspaceSheet(state.workspace || '/root'); },
   'fetch-attach-url': () => { const val = $('#attachUrlInput')?.value.trim(); if (val) attachExternalUrl(val); },
-  send: () => (state.streaming ? stopStreaming() : send()),
+  send: () => {
+    const mode = $('#sendBtn').dataset.mode;
+    if (mode === 'stop') stopStreaming();
+    else if (mode === 'talk') voiceOpen();
+    else send();
+  },
   mic: toggleMic,
   'voice-open': voiceOpen,
   'test-voice': testVoice,
@@ -2922,7 +3002,8 @@ const actions = {
     const name = el.dataset.name;
     try {
       const sk = await api(`/api/skills/${encodeURIComponent(name)}`);
-      openSkillCreator({ name: sk.name, description: sk.description, content: sk.content, agent_scope: sk.agent_scope });
+      const listed = allSkills.find((x) => x.name === name);
+      openSkillCreator({ name: sk.name, description: sk.description, content: sk.content, agent_scope: sk.agent_scope, is_builtin: !!(sk.is_builtin || (listed && listed.is_builtin)) });
     } catch {
       toast('Could not load skill details', 'err');
     }
@@ -2983,7 +3064,15 @@ document.addEventListener('click', async (e) => {
   if ((el = q('[data-pick-agent]'))) {
     setAgent(el.dataset.pickAgent);
     if (vc.open) store.set('voiceAgent', state.agent);
+    showAllModels = false;
     if (MODEL_AGENTS.includes(state.agent)) openAgentSheet(); else closeSheet();   // stay open to pick a model
+    return;
+  }
+  if (q('[data-toggle-all-models]')) { showAllModels = !showAllModels; openAgentSheet(); return; }
+  if ((el = q('[data-agent-chip]'))) {
+    const k = el.dataset.agentChip;
+    if (k === state.agent && MODEL_AGENTS.includes(k)) { showAllModels = false; openAgentSheet(); }
+    else { setAgent(k); haptic(); }
     return;
   }
   if ((el = q('[data-pick-model]'))) { setModel(el.dataset.pickModel); closeSheet(); return; }
@@ -3024,6 +3113,7 @@ document.addEventListener('click', async (e) => {
     return;
   }
   if (q('[data-retry]')) { retryLast(); return; }
+  if (q('[data-toggle-procs]')) { showAllProcs = !showAllProcs; renderProcesses(state.procs || []); return; }
   if ((el = q('[data-kill]'))) { killProcess(Number(el.dataset.kill), el.dataset.killName); return; }
   if ((el = q('[data-del]'))) { e.stopPropagation(); deleteSession(el.dataset.del); return; }
   if ((el = q('[data-open]'))) { openSession(el.dataset.open); return; }
@@ -3102,15 +3192,6 @@ threadEl().addEventListener('scroll', onThreadScroll, { passive: true });
 $('#historySearch')?.addEventListener('input', renderHistory);
 $('#skillsSearch')?.addEventListener('input', renderSkills);
 $('#mcpSearch')?.addEventListener('input', renderMcp);
-
-$('#usageAgentToggle')?.addEventListener('click', (e) => {
-  const btn = e.target.closest('button[data-usage-agent]');
-  if (!btn) return;
-  const agent = btn.dataset.usageAgent || 'all';
-  state.usageAgent = agent;
-  $$('#usageAgentToggle button').forEach(b => b.setAttribute('aria-checked', String(b === btn)));
-  pollUsage();
-});
 
 $('#pref5hBudget')?.addEventListener('change', (e) => {
   const val = Math.max(1000, parseInt(e.target.value) || 200000);
@@ -3250,9 +3331,9 @@ async function boot() {
   setInterval(checkForUpdate, 45000);
   setInterval(() => { if (!document.hidden && (state.running.size || state.tab === 'history')) loadSessions(true); }, 5000);
 
-  // Resume the last conversation unless the user asked for a fresh one (PWA shortcut).
+  // Start on the Chats home. A reload of the same tab (e.g. an auto-update) reopens the conversation it had open.
   const fresh = new URLSearchParams(location.search).has('new');
-  const last = store.get('session', null);
+  const last = sessionStorage.getItem('ah.open');
   if (!fresh && last && state.sessions.some((s) => s.id === last)) await openSession(last);
   else if (fresh) input.focus();
 }
