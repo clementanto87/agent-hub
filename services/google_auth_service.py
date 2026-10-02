@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import re
 import urllib.parse
 import requests
 from typing import Dict, Any, List, Optional
@@ -49,31 +50,58 @@ def get_auth_url(redirect_uri: str = "http://localhost:8080/auth/google/callback
     }
     return f"{secrets['auth_uri']}?{urllib.parse.urlencode(params)}"
 
-def exchange_code_for_tokens(code: str, redirect_uri: str = "http://localhost:8080/auth/google/callback") -> Dict[str, Any]:
+def exchange_code_for_tokens(raw_input: str, redirect_uri: str = "http://localhost:8080/auth/google/callback") -> Dict[str, Any]:
     secrets = load_client_secrets()
     if not secrets.get("client_id") or not secrets.get("client_secret"):
         return {"success": False, "error": "Missing client credentials"}
 
-    data = {
-        "code": code,
-        "client_id": secrets["client_id"],
-        "client_secret": secrets["client_secret"],
-        "redirect_uri": redirect_uri,
-        "grant_type": "authorization_code"
-    }
-    resp = requests.post(secrets["token_uri"], data=data)
-    if resp.status_code != 200:
-        return {"success": False, "error": resp.text}
+    code = raw_input.strip()
+    # Check if a full URL was pasted
+    if "code=" in code:
+        m = re.search(r"code=([^&]+)", code)
+        if m:
+            code = urllib.parse.unquote(m.group(1))
 
-    tokens = resp.json()
-    save_tokens(tokens)
-    return {"success": True, "tokens": tokens}
+    # Try token exchange with specified redirect_uri, and fallback to http://localhost
+    uris_to_try = [redirect_uri, "http://localhost", "http://localhost:8080/auth/google/callback", "http://127.0.0.1:8080/auth/google/callback"]
+    last_error = ""
+
+    for r_uri in uris_to_try:
+        data = {
+            "code": code,
+            "client_id": secrets["client_id"],
+            "client_secret": secrets["client_secret"],
+            "redirect_uri": r_uri,
+            "grant_type": "authorization_code"
+        }
+        try:
+            resp = requests.post(secrets["token_uri"], data=data, timeout=10)
+            if resp.status_code == 200:
+                tokens = resp.json()
+                save_tokens(tokens)
+                return {"success": True, "tokens": tokens}
+            else:
+                last_error = resp.text
+        except Exception as e:
+            last_error = str(e)
+
+    return {"success": False, "error": last_error or "Token exchange failed"}
 
 def save_tokens(tokens: Dict[str, Any]):
+    secrets = load_client_secrets()
     os.makedirs(os.path.dirname(CREDENTIALS_JSON_PATH), exist_ok=True)
-    tokens["saved_at"] = time.time()
+    tokens_data = {
+        "client_id": secrets.get("client_id"),
+        "client_secret": secrets.get("client_secret"),
+        "access_token": tokens.get("access_token"),
+        "refresh_token": tokens.get("refresh_token"),
+        "token_uri": secrets.get("token_uri", "https://oauth2.googleapis.com/token"),
+        "type": "authorized_user",
+        "saved_at": time.time(),
+        "expires_in": tokens.get("expires_in", 3600)
+    }
     with open(CREDENTIALS_JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump(tokens, f, indent=2)
+        json.dump(tokens_data, f, indent=2)
 
 def load_access_token() -> Optional[str]:
     if not os.path.exists(CREDENTIALS_JSON_PATH):
@@ -95,12 +123,14 @@ def load_access_token() -> Optional[str]:
                 "refresh_token": refresh_token,
                 "grant_type": "refresh_token"
             }
-            resp = requests.post(secrets["token_uri"], data=data)
+            resp = requests.post(secrets["token_uri"], data=data, timeout=10)
             if resp.status_code == 200:
-                new_tokens = resp.json()
-                new_tokens["refresh_token"] = refresh_token
-                save_tokens(new_tokens)
-                return new_tokens.get("access_token")
+                new_data = resp.json()
+                tokens["access_token"] = new_data.get("access_token")
+                tokens["saved_at"] = time.time()
+                with open(CREDENTIALS_JSON_PATH, "w", encoding="utf-8") as f:
+                    json.dump(tokens, f, indent=2)
+                return tokens.get("access_token")
         return access_token
     except Exception:
         return None
@@ -111,23 +141,26 @@ def search_gmail_messages(query: str = "is:unread", max_results: int = 10) -> Li
         return []
     headers = {"Authorization": f"Bearer {token}"}
     params = {"q": query, "maxResults": max_results}
-    resp = requests.get("https://gmail.googleapis.com/gmail/v1/users/me/messages", headers=headers, params=params)
-    if resp.status_code != 200:
+    try:
+        resp = requests.get("https://gmail.googleapis.com/gmail/v1/users/me/messages", headers=headers, params=params, timeout=10)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        messages = []
+        for m in data.get("messages", []):
+            m_id = m["id"]
+            m_resp = requests.get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{m_id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date", headers=headers, timeout=8)
+            if m_resp.status_code == 200:
+                m_data = m_resp.json()
+                headers_list = m_data.get("payload", {}).get("headers", [])
+                headers_dict = {h["name"]: h["value"] for h in headers_list}
+                messages.append({
+                    "id": m_id,
+                    "snippet": m_data.get("snippet", ""),
+                    "subject": headers_dict.get("Subject", "(No Subject)"),
+                    "from": headers_dict.get("From", "Unknown"),
+                    "date": headers_dict.get("Date", "")
+                })
+        return messages
+    except Exception:
         return []
-    data = resp.json()
-    messages = []
-    for m in data.get("messages", []):
-        m_id = m["id"]
-        m_resp = requests.get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{m_id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date", headers=headers)
-        if m_resp.status_code == 200:
-            m_data = m_resp.json()
-            headers_list = m_data.get("payload", {}).get("headers", [])
-            headers_dict = {h["name"]: h["value"] for h in headers_list}
-            messages.append({
-                "id": m_id,
-                "snippet": m_data.get("snippet", ""),
-                "subject": headers_dict.get("Subject", "(No Subject)"),
-                "from": headers_dict.get("From", "Unknown"),
-                "date": headers_dict.get("Date", "")
-            })
-    return messages

@@ -684,48 +684,82 @@ async def generate_mcp_endpoint(request: Request):
         return JSONResponse({"error": "Prompt is required"}, status_code=400)
     res = await asyncio.to_thread(skills_mcp_service.generate_mcp_ai, prompt)
 @app.get("/auth/google")
-async def auth_google_redirect(request: Request):
+async def auth_google_page(request: Request):
     from services import google_auth_service
     redirect_uri = str(request.url_for("auth_google_callback"))
     url = google_auth_service.get_auth_url(redirect_uri=redirect_uri)
-    if not url:
-        return HTMLResponse("<h3>Error: Missing Google OAuth Client Secrets</h3>", status_code=500)
-    return Response(status_code=302, headers={"Location": url})
-
-@app.get("/auth/google/callback")
-async def auth_google_callback(request: Request, code: str = None, error: str = None):
-    from services import google_auth_service
-    if error or not code:
-        return HTMLResponse(f"<h3>Authentication Failed</h3><p>{error or 'No code provided'}</p>", status_code=400)
-    redirect_uri = str(request.url_for("auth_google_callback"))
-    res = google_auth_service.exchange_code_for_tokens(code, redirect_uri=redirect_uri)
-    if not res.get("success"):
-        return HTMLResponse(f"<h3>Token Exchange Failed</h3><p>{res.get('error')}</p>", status_code=400)
-    return HTMLResponse("""
+    token = google_auth_service.load_access_token()
+    is_auth = bool(token)
+    
+    html = f"""
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>Google Workspace Connected</title>
+      <title>Google Workspace & Gmail Connection</title>
       <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0a14; color: #fff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; text-align: center; }
-        .card { background: #181826; border: 1px solid #2e2e48; border-radius: 16px; padding: 32px 24px; max-width: 420px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
-        h2 { color: #34d399; margin-top: 0; }
-        p { color: #a1a1aa; line-height: 1.5; font-size: 15px; }
-        .btn { display: inline-block; margin-top: 18px; padding: 10px 20px; background: #7c8cff; color: #0a0a1f; text-decoration: none; border-radius: 10px; font-weight: 600; }
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0a14; color: #fff; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }}
+        .card {{ background: #181826; border: 1px solid #2e2e48; border-radius: 16px; padding: 32px 24px; max-width: 460px; width: 100%; box-shadow: 0 8px 30px rgba(0,0,0,0.5); text-align: center; }}
+        h2 {{ margin-top: 0; font-size: 20px; }}
+        p {{ color: #a1a1aa; line-height: 1.5; font-size: 14px; text-align: left; }}
+        .status-badge {{ display: inline-block; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; margin-bottom: 16px; }}
+        .status-ok {{ background: rgba(52, 211, 153, 0.15); color: #34d399; border: 1px solid rgba(52, 211, 153, 0.3); }}
+        .status-warn {{ background: rgba(251, 191, 36, 0.15); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.3); }}
+        .btn {{ display: block; width: 100%; box-sizing: border-box; padding: 12px 18px; background: #7c8cff; color: #0a0a1f; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 15px; margin-top: 14px; border: none; cursor: pointer; text-align: center; }}
+        .btn-outline {{ background: transparent; border: 1px solid #3e3e5e; color: #a1a1aa; margin-top: 10px; }}
+        .box {{ background: #0e0e1a; border: 1px solid #252538; border-radius: 10px; padding: 14px; margin-top: 18px; text-align: left; }}
+        input[type="text"] {{ width: 100%; box-sizing: border-box; padding: 10px 12px; background: #181826; border: 1px solid #3e3e5e; border-radius: 8px; color: #fff; font-size: 13px; margin-top: 8px; }}
       </style>
     </head>
     <body>
       <div class="card">
-        <h2>✅ Gmail & Workspace Connected</h2>
-        <p>Your Google Workspace credentials and Gmail permissions have been successfully authorized for AgentHub.</p>
-        <p>You can now return to chat and ask the agents to read or summarize your emails.</p>
-        <a href="/" class="btn">Return to AgentHub</a>
+        <h2>📬 Google Workspace & Gmail Connection</h2>
+        <div class="status-badge {'status-ok' if is_auth else 'status-warn'}">
+          {'✅ Gmail Access Authenticated' if is_auth else '⚠️ Authorization Required'}
+        </div>
+        
+        <p>Authorize Gmail read, search, and send permissions so all agents (Claude, Codex, Antigravity) can read and summarize your emails directly.</p>
+        
+        <a href="{url}" target="_blank" class="btn">1. Sign In with Google</a>
+
+        <div class="box">
+          <span style="font-size:12px; font-weight:600; color:#818cf8;">Mobile / Alternative Code Paste</span>
+          <p style="font-size:12px; color:#8e8e9f; margin:6px 0 0 0;">If Google redirects to a page on your phone, copy the URL or code and paste it below:</p>
+          <form method="POST" action="/auth/google/paste" style="margin-top:8px;">
+            <input type="text" name="code" placeholder="Paste authorization code or redirect URL..." required>
+            <button type="submit" class="btn" style="background:#34d399; color:#062316; margin-top:10px;">2. Activate Gmail Access</button>
+          </form>
+        </div>
+
+        <a href="/" class="btn btn-outline">Return to AgentHub</a>
       </div>
     </body>
     </html>
-    """)
+    """
+    return HTMLResponse(html)
+
+@app.post("/auth/google/paste")
+async def auth_google_paste(request: Request):
+    from services import google_auth_service
+    form = await request.form()
+    code = form.get("code") or ""
+    res = google_auth_service.exchange_code_for_tokens(code)
+    if res.get("success"):
+        return Response(status_code=302, headers={"Location": "/auth/google"})
+    else:
+        return HTMLResponse(f"<h3>Activation Failed</h3><p>{res.get('error')}</p><a href='/auth/google'>Try Again</a>", status_code=400)
+
+@app.get("/auth/google/callback")
+async def auth_google_callback(request: Request, code: str = None, error: str = None):
+    from services import google_auth_service
+    if error or not code:
+        return HTMLResponse(f"<h3>Authentication Failed</h3><p>{error or 'No code provided'}</p><a href='/auth/google'>Back</a>", status_code=400)
+    redirect_uri = str(request.url_for("auth_google_callback"))
+    res = google_auth_service.exchange_code_for_tokens(code, redirect_uri=redirect_uri)
+    if not res.get("success"):
+        return HTMLResponse(f"<h3>Token Exchange Failed</h3><p>{res.get('error')}</p><a href='/auth/google'>Back</a>", status_code=400)
+    return Response(status_code=302, headers={"Location": "/auth/google"})
 
 @app.websocket("/ws/terminal")
 async def websocket_terminal(websocket: WebSocket, cwd: str = "/root"):
