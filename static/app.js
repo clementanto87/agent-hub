@@ -56,6 +56,8 @@ const state = {
   sessions: [],
   sessionsLoaded: false,
   attachments: [],
+  groupBy: store.get('groupBy', 'folder'),   // chat lists: 'folder' or 'date'
+  expandedWs: new Set(),
   tunnel: { active: false, url: '' },
   prefs: {
     enter: store.get('pref.enter', window.matchMedia('(pointer: fine)').matches),
@@ -1064,6 +1066,7 @@ function closeNav() {}
 function toggleNav() {}
 
 function switchTab(tab) {
+  if (state.tab === 'history' && tab !== 'history' && $('#historySearch')) $('#historySearch').value = '';   // don't keep a folder filter around
   state.tab = tab;
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${tab}`));
   $$('[data-tab]').forEach((b) => {
@@ -1075,7 +1078,7 @@ function switchTab(tab) {
 
   if (tab === 'skills') loadSkillsAndMcp();
   if (tab === 'terminal') setTimeout(openTerminal, 60);
-  if (tab === 'history') { loadSessions(); setTimeout(() => $('#historySearch')?.focus({ preventScroll: true }), 80); }
+  if (tab === 'history') { loadSessions(); renderHistory(); if (!$('#historySearch').value) setTimeout(() => $('#historySearch')?.focus({ preventScroll: true }), 80); }
   if (tab === 'settings') { refreshSettings(); checkTunnel(); }
   if (tab === 'chat') { state.stick && scrollToBottom(); }
   syncMonitorPolling();
@@ -1204,11 +1207,56 @@ function renderEmpty() {
 }
 
 // The Chats home: what is running now, then recent conversations.
+// Chats grouped by the folder they ran in, busiest-recent folder first.
+function groupByFolder(list) {
+  const groups = new Map();
+  list.forEach((s) => {
+    const ws = s.workspace || '';
+    if (!groups.has(ws)) groups.set(ws, []);
+    groups.get(ws).push(s);
+  });
+  return [...groups].map(([ws, items]) => ({ ws, items, last: Math.max(...items.map((x) => x.updated_at || 0)) }))
+    .sort((x, y) => y.last - x.last);
+}
+
+const prettyPath = (p) => (p || '').replace(/^\/root(?=\/|$)/, '~');
+
+function groupToggle() {
+  const f = state.groupBy === 'folder';
+  return `<div class="group-toggle" role="radiogroup" aria-label="Group chats">
+    <button role="radio" aria-checked="${f}" class="${f ? 'on' : ''}" data-group-by="folder">Folders</button>
+    <button role="radio" aria-checked="${!f}" class="${f ? '' : 'on'}" data-group-by="date">Latest</button>
+  </div>`;
+}
+
+function folderHead(ws, count) {
+  const cur = ws && ws === state.workspace;
+  return `<div class="folder-head ${cur ? 'current' : ''}">
+    ${icon('i-folder', 'xs')}
+    <span class="folder-head-main"><span class="folder-head-name">${esc(ws ? basename(ws) : 'No folder')}</span>${ws ? `<span class="folder-head-path">${esc(prettyPath(ws))}</span>` : ''}</span>
+    <span class="folder-head-count">${count}</span>
+    ${ws ? `<button class="icon-btn sm" data-new-in-ws="${esc(ws)}" aria-label="New task in ${esc(basename(ws))}" title="New task in this folder">${icon('i-plus')}</button>` : ''}
+  </div>`;
+}
+
+function chatRow(s) {
+  const a = AGENTS[s.agent] || AGENTS.antigravity;
+  return `
+    <button class="chat-row" data-open="${esc(s.id)}">
+      <span class="dot" style="--agent:${a.color}"></span>
+      <span class="chat-row-main">
+        <span class="chat-row-title">${esc(s.title || 'Untitled')}</span>
+        <span class="chat-row-meta">${esc(a.name)} · ${esc(relTime(s.updated_at))}</span>
+      </span>
+    </button>`;
+}
+
+// The Chats home: what is running now, then recent conversations (by folder or by date).
 function renderHome() {
   if (state.messages.length || state.sessionId) return;
   const agentOf = (s) => AGENTS[s.agent] || AGENTS.antigravity;
   const running = state.sessions.filter((s) => state.running.has(s.id));
-  const recent = state.sessions.filter((s) => !state.running.has(s.id)).slice(0, 8);
+  const rest = state.sessions.filter((s) => !state.running.has(s.id));
   const runCards = running.map((s) => `
     <button class="run-card" data-open="${esc(s.id)}" style="--agent:${agentOf(s).color}">
       <span class="run-card-head">
@@ -1220,20 +1268,26 @@ function renderHome() {
       </span>
       <span class="run-card-live"><span class="live-dot"></span>Working — tap to follow along</span>
     </button>`).join('');
-  const rows = recent.map((s) => `
-    <button class="chat-row" data-open="${esc(s.id)}">
-      <span class="dot" style="--agent:${agentOf(s).color}"></span>
-      <span class="chat-row-main">
-        <span class="chat-row-title">${esc(s.title || 'Untitled')}</span>
-        <span class="chat-row-meta">${esc(agentOf(s).name)} · ${esc(relTime(s.updated_at))}</span>
-      </span>
-    </button>`).join('');
+
+  let list;
+  if (!rest.length) {
+    list = `<p class="home-empty">${state.sessionsLoaded ? 'No conversations yet. Describe a task above and pick an agent.' : 'Loading conversations…'}</p>`;
+  } else if (state.groupBy === 'folder') {
+    list = groupByFolder(rest).slice(0, 8).map((g) => {
+      return `<div class="folder-group-card">${folderHead(g.ws, g.items.length)}${g.items.slice(0, 3).map(chatRow).join('')}
+        ${g.items.length > 3 && g.ws ? `<button class="link-btn more" data-history-ws="${esc(g.ws)}">All ${g.items.length} in ${esc(basename(g.ws))}</button>` : ''}</div>`;
+    }).join('');
+  } else {
+    list = rest.slice(0, 8).map(chatRow).join('');
+  }
+
   threadEl().innerHTML = `
     <div class="home">
       ${running.length ? `<section class="home-sec"><h2>Running now</h2>${runCards}</section>` : ''}
       <section class="home-sec">
-        <div class="home-sec-head"><h2>Recent</h2>${state.sessions.length ? '<button class="link-btn" data-tab="history">All chats</button>' : ''}</div>
-        ${rows || `<p class="home-empty">${state.sessionsLoaded ? 'No conversations yet. Describe a task above and pick an agent.' : 'Loading conversations…'}</p>`}
+        <div class="home-sec-head"><h2>Recent</h2>${rest.length ? groupToggle() : ''}</div>
+        ${list}
+        ${state.sessions.length ? '<button class="link-btn" data-tab="history">All chats</button>' : ''}
       </section>
     </div>`;
 }
@@ -2565,20 +2619,8 @@ async function loadSessions(quiet = false) {
   if (chromeMode() === 'home') renderHome();
 }
 
-function renderHistory() {
-  const q = $('#historySearch').value.trim().toLowerCase();
-  const list = state.sessions.filter((s) => !q || (s.title || '').toLowerCase().includes(q) || (s.agent || '').toLowerCase().includes(q));
-  const el = $('#sessionList');
-  if (!list.length) {
-    el.innerHTML = `<div class="empty-inline">${q ? 'No conversations match your search.' : 'No conversations yet. Start one from the Chat tab.'}</div>`;
-    return;
-  }
-  const groups = new Map();
-  list.forEach((s) => { const k = dayBucket(s.updated_at); (groups.get(k) || groups.set(k, []).get(k)).push(s); });
-  el.innerHTML = [...groups].map(([label, items]) => `
-    <div>
-      <div class="day-label">${label}</div>
-      ${items.map((s) => `
+function sessRow(s) {
+  return `
         <div class="sess ${s.id === state.sessionId ? 'current' : ''}" data-open="${esc(s.id)}" role="button" tabindex="0">
           <span class="dot" style="--agent:${(AGENTS[s.agent] || AGENTS.antigravity).color}"></span>
           <div class="sess-main">
@@ -2586,7 +2628,28 @@ function renderHistory() {
             <div class="sess-meta">${esc((AGENTS[s.agent] || { name: s.agent }).name)} · ${state.running.has(s.id) ? '<span class="sess-run">Running…</span>' : relTime(s.updated_at)}</div>
           </div>
           <button class="sess-del" data-del="${esc(s.id)}" aria-label="Delete conversation">${icon('i-trash')}</button>
-        </div>`).join('')}
+        </div>`;
+}
+
+function renderHistory() {
+  const q = $('#historySearch').value.trim().toLowerCase();
+  const list = state.sessions.filter((s) => !q || (s.title || '').toLowerCase().includes(q) || (s.agent || '').toLowerCase().includes(q) || (s.workspace || '').toLowerCase().includes(q));
+  const el = $('#sessionList');
+  if (!list.length) {
+    el.innerHTML = `${groupToggle()}<div class="empty-inline">${q ? 'No conversations match your search.' : 'No conversations yet. Start one from the Chats tab.'}</div>`;
+    return;
+  }
+  if (state.groupBy === 'folder') {
+    el.innerHTML = groupToggle() + groupByFolder(list).map((g) => `
+      <div class="hist-group">${folderHead(g.ws, g.items.length)}${g.items.map(sessRow).join('')}</div>`).join('');
+    return;
+  }
+  const groups = new Map();
+  list.forEach((s) => { const k = dayBucket(s.updated_at); (groups.get(k) || groups.set(k, []).get(k)).push(s); });
+  el.innerHTML = groupToggle() + [...groups].map(([label, items]) => `
+    <div>
+      <div class="day-label">${label}</div>
+      ${items.map(sessRow).join('')}
     </div>`).join('');
 }
 
@@ -2598,10 +2661,21 @@ function renderRail() {
       <span class="dot ${state.running.has(s.id) ? 'live' : ''}" style="--agent:${(AGENTS[s.agent] || AGENTS.antigravity).color}"></span><span>${esc(s.title || 'Untitled')}</span>
     </button>`;
   const running = state.sessions.filter((s) => state.running.has(s.id));
-  const recent = state.sessions.filter((s) => !state.running.has(s.id)).slice(0, 14);
+  const rest = state.sessions.filter((s) => !state.running.has(s.id));
+  let body;
+  if (!rest.length) body = '<div class="rail-empty">No conversations yet</div>';
+  else if (state.groupBy === 'folder') {
+    body = groupByFolder(rest).slice(0, 8).map((g) => {
+      const open = state.expandedWs.has(g.ws);
+      return `<div class="rail-folder">
+        <div class="rail-section-title folder" title="${esc(g.ws)}">${icon('i-folder', 'xs')}<span>${esc(g.ws ? basename(g.ws) : 'No folder')}</span><span class="rail-count">${g.items.length}</span></div>
+        ${(open ? g.items : g.items.slice(0, 4)).map(row).join('')}
+        ${g.items.length > 4 ? `<button class="rail-more" data-expand-ws="${esc(g.ws)}">${open ? 'Show fewer' : `${g.items.length - 4} more`}</button>` : ''}
+      </div>`;
+    }).join('');
+  } else body = rest.slice(0, 14).map(row).join('');
   el.innerHTML = (running.length ? `<div class="rail-section-title">Running</div>${running.map(row).join('')}` : '')
-    + `<div class="rail-section-title">Recent</div>`
-    + (recent.length ? recent.map(row).join('') : '<div class="rail-empty">No conversations yet</div>');
+    + `<div class="rail-section-title rail-head">${state.groupBy === 'folder' ? 'By folder' : 'Recent'}${groupToggle()}</div>` + body;
 }
 
 async function deleteSession(id) {
@@ -3146,6 +3220,29 @@ document.addEventListener('click', async (e) => {
     return;
   }
   if (q('[data-retry]')) { retryLast(); return; }
+  if ((el = q('[data-group-by]'))) {
+    state.groupBy = el.dataset.groupBy;
+    store.set('groupBy', state.groupBy);
+    renderHistory(); renderRail(); if (chromeMode() === 'home') renderHome();
+    return;
+  }
+  if ((el = q('[data-history-ws]'))) {
+    $('#historySearch').value = el.dataset.historyWs;
+    switchTab('history');
+    return;
+  }
+  if ((el = q('[data-expand-ws]'))) {
+    const ws = el.dataset.expandWs;
+    if (state.expandedWs.has(ws)) state.expandedWs.delete(ws); else state.expandedWs.add(ws);
+    renderRail(); if (chromeMode() === 'home') renderHome();
+    return;
+  }
+  if ((el = q('[data-new-in-ws]'))) {
+    setWorkspace(el.dataset.newInWs);
+    if (state.tab !== 'chat' || chromeMode() !== 'home') newChat({ focus: false });
+    $('#promptInput').focus();
+    return;
+  }
   if (q('[data-toggle-procs]')) { showAllProcs = !showAllProcs; renderProcesses(state.procs || []); return; }
   if ((el = q('[data-kill]'))) { killProcess(Number(el.dataset.kill), el.dataset.killName); return; }
   if ((el = q('[data-del]'))) { e.stopPropagation(); deleteSession(el.dataset.del); return; }

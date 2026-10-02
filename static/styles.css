@@ -791,3 +791,36 @@ body.voice-mode .main { visibility: hidden !important; pointer-events: none !imp
 .ws-btn .i:last-child { color: var(--text-3); }
 .ws-btn:hover { background: var(--surface-3); }
 #view-chat.is-home .ws-btn { display: inline-flex; }
+
+/* ── Chats grouped by folder ────────────────────────────── */
+.group-toggle { display: inline-flex; padding: 2px; border-radius: 10px; background: var(--surface-2); flex: none; }
+.group-toggle button { height: 30px; padding: 0 12px; border-radius: 8px; font-size: 12.5px; font-weight: 500; color: var(--text-2); }
+.group-toggle button.on { background: var(--surface-3); color: var(--text); font-weight: 600; }
+.home-sec-head { align-items: center; }
+.folder-group-card { display: flex; flex-direction: column; padding: 4px 12px 6px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface-1); }
+.folder-group-card + .folder-group-card { margin-top: 4px; }
+.folder-group-card .chat-row:last-of-type { border-bottom: 0; }
+.folder-group-card .chat-row { min-height: 54px; }
+.folder-head { display: flex; align-items: center; gap: 9px; min-height: 48px; border-bottom: 1px solid var(--line); }
+.folder-head > .i:first-child { color: #60a5fa; width: 16px; height: 16px; }
+.folder-head.current > .i:first-child { color: var(--accent); }
+.folder-head-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.folder-head-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-head-path { font: 11px var(--mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-head-count { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.folder-head .icon-btn.sm { width: 40px; height: 40px; margin-right: -8px; }
+.link-btn.more { padding: 8px 0 4px; }
+
+#sessionList .group-toggle { align-self: flex-start; }
+.hist-group { display: flex; flex-direction: column; }
+.hist-group .folder-head { border-bottom: 0; padding: 0 2px 4px; }
+.hist-group .sess + .sess { margin-top: 6px; }
+
+.rail-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-right: 0; }
+.rail-head .group-toggle button { height: 26px; padding: 0 8px; font-size: 11.5px; }
+.rail-section-title.folder { display: flex; align-items: center; gap: 6px; padding-top: 10px; }
+.rail-section-title.folder span:first-of-type { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-section-title.folder .i { color: #60a5fa; }
+.rail-count { font-weight: 500; }
+.rail-more { font-size: 12.5px; color: var(--text-3); padding: 4px 12px 4px 30px; text-align: left; }
+.rail-more:hover { color: var(--accent); }
