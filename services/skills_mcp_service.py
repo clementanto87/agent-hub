@@ -11,12 +11,14 @@ API_KEY = os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY', '
 # Standard Locations
 ANTIGRAVITY_CUSTOM_SKILLS = "/root/.gemini/config/skills"
 ANTIGRAVITY_BUILTIN_SKILLS = "/root/.gemini/antigravity-cli/builtin/skills"
+CODEX_SKILLS = "/root/.codex/skills"
 CLAUDE_SKILLS = "/root/.claude/skills"
 CLAUDE_CONFIG = "/root/.claude.json"
 CLAUDE_SETTINGS = "/root/.claude/settings.json"
 ANTIGRAVITY_MCP_DIR = "/root/.gemini/antigravity-cli/mcp"
 
 os.makedirs(ANTIGRAVITY_CUSTOM_SKILLS, exist_ok=True)
+os.makedirs(CODEX_SKILLS, exist_ok=True)
 os.makedirs(CLAUDE_SKILLS, exist_ok=True)
 os.makedirs(ANTIGRAVITY_MCP_DIR, exist_ok=True)
 
@@ -68,10 +70,23 @@ def list_all_skills() -> List[Dict[str, Any]]:
                     skills.append(info)
                     seen_names.add(info["name"])
 
-    # 2. Claude Code Skills
+    # 2. Codex Skills
+    if os.path.isdir(CODEX_SKILLS):
+        for entry in os.scandir(CODEX_SKILLS):
+            if entry.is_dir() and entry.name != ".system":
+                skill_md = os.path.join(entry.path, "SKILL.md")
+                if os.path.exists(skill_md) and entry.name not in seen_names:
+                    info = parse_skill_md(skill_md)
+                    info["agent_scope"] = "codex"
+                    info["is_builtin"] = False
+                    info["category"] = "Codex Skill"
+                    skills.append(info)
+                    seen_names.add(info["name"])
+
+    # 3. Claude Code Skills
     if os.path.isdir(CLAUDE_SKILLS):
         for entry in os.scandir(CLAUDE_SKILLS):
-            if entry.is_dir():
+            if entry.is_dir() and entry.name != "synced":
                 skill_md = os.path.join(entry.path, "SKILL.md")
                 if os.path.exists(skill_md) and entry.name not in seen_names:
                     info = parse_skill_md(skill_md)
@@ -81,7 +96,7 @@ def list_all_skills() -> List[Dict[str, Any]]:
                     skills.append(info)
                     seen_names.add(info["name"])
 
-    # 3. Antigravity Built-in Skills
+    # 4. Antigravity Built-in Skills
     if os.path.isdir(ANTIGRAVITY_BUILTIN_SKILLS):
         for entry in os.scandir(ANTIGRAVITY_BUILTIN_SKILLS):
             if entry.is_dir():
@@ -104,17 +119,10 @@ def get_skill_details(name: str) -> Optional[Dict[str, Any]]:
     return None
 
 def save_skill(name: str, description: str, content: str, agent_scope: str = "global") -> Dict[str, Any]:
+    import shutil
     clean_name = re.sub(r'[^a-zA-Z0-9_-]', '-', name.strip().lower()).strip('-')
     if not clean_name:
         raise ValueError("Invalid skill name")
-
-    if agent_scope == "claude":
-        target_dir = os.path.join(CLAUDE_SKILLS, clean_name)
-    else:
-        target_dir = os.path.join(ANTIGRAVITY_CUSTOM_SKILLS, clean_name)
-
-    os.makedirs(target_dir, exist_ok=True)
-    skill_file = os.path.join(target_dir, "SKILL.md")
 
     # Format frontmatter if not present
     if not content.strip().startswith("---"):
@@ -122,20 +130,56 @@ def save_skill(name: str, description: str, content: str, agent_scope: str = "gl
     else:
         full_content = content.strip() + "\n"
 
-    with open(skill_file, "w", encoding="utf-8") as f:
-        f.write(full_content)
+    def write_skill_to_dir(parent_dir: str):
+        target_dir = os.path.join(parent_dir, clean_name)
+        os.makedirs(target_dir, exist_ok=True)
+        file_path = os.path.join(target_dir, "SKILL.md")
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(full_content)
+        return file_path
 
-    return parse_skill_md(skill_file)
+    def remove_skill_from_dir(parent_dir: str):
+        target_dir = os.path.join(parent_dir, clean_name)
+        if os.path.islink(target_dir) or os.path.isfile(target_dir):
+            os.unlink(target_dir)
+        elif os.path.isdir(target_dir):
+            shutil.rmtree(target_dir, ignore_errors=True)
+
+    primary_file = None
+    if agent_scope == "global":
+        primary_file = write_skill_to_dir(ANTIGRAVITY_CUSTOM_SKILLS)
+        write_skill_to_dir(CODEX_SKILLS)
+        write_skill_to_dir(CLAUDE_SKILLS)
+    elif agent_scope == "antigravity":
+        primary_file = write_skill_to_dir(ANTIGRAVITY_CUSTOM_SKILLS)
+        remove_skill_from_dir(CODEX_SKILLS)
+        remove_skill_from_dir(CLAUDE_SKILLS)
+    elif agent_scope == "codex":
+        primary_file = write_skill_to_dir(CODEX_SKILLS)
+        remove_skill_from_dir(ANTIGRAVITY_CUSTOM_SKILLS)
+        remove_skill_from_dir(CLAUDE_SKILLS)
+    elif agent_scope == "claude":
+        primary_file = write_skill_to_dir(CLAUDE_SKILLS)
+        remove_skill_from_dir(ANTIGRAVITY_CUSTOM_SKILLS)
+        remove_skill_from_dir(CODEX_SKILLS)
+    else:
+        primary_file = write_skill_to_dir(ANTIGRAVITY_CUSTOM_SKILLS)
+
+    return parse_skill_md(primary_file)
 
 def delete_skill(name: str) -> bool:
     import shutil
-    skills = list_all_skills()
-    for s in skills:
-        if s["name"] == name and not s["is_builtin"]:
-            if os.path.isdir(s["dir"]):
-                shutil.rmtree(s["dir"], ignore_errors=True)
-                return True
-    return False
+    clean_name = re.sub(r'[^a-zA-Z0-9_-]', '-', name.strip().lower()).strip('-')
+    deleted = False
+    for parent_dir in [ANTIGRAVITY_CUSTOM_SKILLS, CODEX_SKILLS, CLAUDE_SKILLS]:
+        target_dir = os.path.join(parent_dir, clean_name)
+        if os.path.islink(target_dir) or os.path.isfile(target_dir):
+            os.unlink(target_dir)
+            deleted = True
+        elif os.path.isdir(target_dir):
+            shutil.rmtree(target_dir, ignore_errors=True)
+            deleted = True
+    return deleted
 
 def generate_skill_ai(prompt: str, agent: str = "antigravity") -> Dict[str, str]:
     client = genai.Client(api_key=API_KEY)
