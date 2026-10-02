@@ -686,8 +686,7 @@ async def generate_mcp_endpoint(request: Request):
 @app.get("/auth/google")
 async def auth_google_page(request: Request):
     from services import google_auth_service
-    redirect_uri = str(request.url_for("auth_google_callback"))
-    url = google_auth_service.get_auth_url(redirect_uri=redirect_uri)
+    url = google_auth_service.get_auth_url(redirect_uri="http://localhost")
     token = google_auth_service.load_access_token()
     is_auth = bool(token)
     

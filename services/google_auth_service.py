@@ -36,7 +36,7 @@ def load_client_secrets() -> Dict[str, str]:
     except Exception:
         return {}
 
-def get_auth_url(redirect_uri: str = "http://localhost:8080/auth/google/callback") -> str:
+def get_auth_url(redirect_uri: str = "http://localhost") -> str:
     secrets = load_client_secrets()
     if not secrets.get("client_id"):
         return ""
@@ -50,7 +50,7 @@ def get_auth_url(redirect_uri: str = "http://localhost:8080/auth/google/callback
     }
     return f"{secrets['auth_uri']}?{urllib.parse.urlencode(params)}"
 
-def exchange_code_for_tokens(raw_input: str, redirect_uri: str = "http://localhost:8080/auth/google/callback") -> Dict[str, Any]:
+def exchange_code_for_tokens(raw_input: str, redirect_uri: str = "http://localhost") -> Dict[str, Any]:
     secrets = load_client_secrets()
     if not secrets.get("client_id") or not secrets.get("client_secret"):
         return {"success": False, "error": "Missing client credentials"}
@@ -62,8 +62,8 @@ def exchange_code_for_tokens(raw_input: str, redirect_uri: str = "http://localho
         if m:
             code = urllib.parse.unquote(m.group(1))
 
-    # Try token exchange with specified redirect_uri, and fallback to http://localhost
-    uris_to_try = [redirect_uri, "http://localhost", "http://localhost:8080/auth/google/callback", "http://127.0.0.1:8080/auth/google/callback"]
+    # Try token exchange with http://localhost first (standard for desktop apps)
+    uris_to_try = ["http://localhost", "http://localhost/", redirect_uri, "http://localhost:8080/auth/google/callback", "http://127.0.0.1:8080/auth/google/callback"]
     last_error = ""
 
     for r_uri in uris_to_try:
