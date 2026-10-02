@@ -1099,6 +1099,7 @@ function updateTitle() {
   $('#topbarSub').hidden = mode !== 'thread';
   $('#topbarStatus').hidden = mode !== 'home';
   $('#tbSearch').hidden = mode !== 'home';
+  if ($('#tbNewChat')) $('#tbNewChat').hidden = mode !== 'thread';
   $('#tbSettings').hidden = mode === 'thread' || state.tab === 'settings';
   $('#tbMore').hidden = mode !== 'thread';
   $$('#tabbar [data-tab="chat"]').forEach((b) => b.classList.toggle('active', state.tab === 'chat' || state.tab === 'history'));
@@ -3032,6 +3033,7 @@ function openChatMenu() {
   openSheet(`
     <h3>${esc(state.title || 'This conversation')}</h3>
     <div>
+      <button class="opt" data-action="new-chat"><span class="opt-ico" style="background:rgba(124, 140, 255, 0.16); color:#7c8cff;">${icon('i-plus')}</span><span class="opt-main"><span class="opt-title">New chat</span><br><span class="opt-sub">Start a fresh conversation</span></span></button>
       <button class="opt" data-action="open-agents"><span class="opt-ico">${icon(AGENTS[state.agent].icon)}</span><span class="opt-main"><span class="opt-title">Agent &amp; model</span><br><span class="opt-sub">${esc(agentLabel(state.agent, currentModel()))}</span></span></button>
       <button class="opt" data-action="open-workspaces"><span class="opt-ico">${icon('i-folder')}</span><span class="opt-main"><span class="opt-title">Workspace</span><br><span class="opt-sub mono">${esc(state.workspace)}</span></span></button>
       ${g ? `<button class="opt" data-action="open-git-changes"><span class="opt-ico">${icon('i-git')}</span><span class="opt-main"><span class="opt-title">Code changes</span><br><span class="opt-sub">${g.files.length} files · +${g.total_adds} −${g.total_dels}</span></span></button>` : ''}
@@ -3048,7 +3050,7 @@ const actions = {
   'toggle-nav': toggleNav,
   'open-nav': openNav,
   'close-nav': closeNav,
-  'new-chat': newChat,
+  'new-chat': () => { closeSheet(); newChat({ focus: true }); },
   'go-home': () => newChat({ focus: false }),
   'open-chat-menu': openChatMenu,
   'open-create-menu': () => {

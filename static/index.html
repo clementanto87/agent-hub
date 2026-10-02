@@ -119,6 +119,7 @@
       </div>
       <div class="topbar-actions">
         <button class="icon-btn" id="tbSearch" data-tab="history" aria-label="Search chats"><svg class="i"><use href="#i-search"/></svg></button>
+        <button class="icon-btn" id="tbNewChat" data-action="new-chat" aria-label="New chat" title="Start new chat" hidden><svg class="i"><use href="#i-plus"/></svg></button>
         <button class="icon-btn" id="tbSettings" data-tab="settings" aria-label="Settings"><svg class="i"><use href="#i-sliders"/></svg></button>
         <button class="icon-btn" id="tbMore" data-action="open-chat-menu" aria-label="Chat options" hidden><svg class="i"><use href="#i-more"/></svg></button>
       </div>
@@ -283,9 +284,14 @@
       <!-- HISTORY -->
       <section class="view scroll" id="view-history" aria-label="History">
         <div class="page">
-          <div class="search">
-            <svg class="i"><use href="#i-search"/></svg>
-            <input id="historySearch" type="search" placeholder="Search conversations" aria-label="Search conversations" autocomplete="off">
+          <div style="display:flex; gap:8px; align-items:center;">
+            <div class="search" style="flex:1;">
+              <svg class="i"><use href="#i-search"/></svg>
+              <input id="historySearch" type="search" placeholder="Search conversations" aria-label="Search conversations" autocomplete="off">
+            </div>
+            <button class="btn btn-primary" data-action="new-chat" style="flex-shrink:0; height:42px; padding:0 14px; border-radius:12px; display:inline-flex; align-items:center; gap:6px; font-weight:600; font-size:13px;">
+              <svg class="i xs"><use href="#i-plus"/></svg> New
+            </button>
           </div>
           <div id="sessionList" class="stack-lg"></div>
         </div>
