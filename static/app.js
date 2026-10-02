@@ -1414,7 +1414,9 @@ function addUserMessage(text, ts, attachments = []) {
     `).join('')}</div>`;
   }
 
-  el.innerHTML = `<div class="bubble">${attachHtml}${esc(text)}</div><div class="msg-time">${clock(ts)}</div>`;
+  el.innerHTML = `<div class="bubble">${attachHtml}${esc(text)}</div>
+    <div class="msg-actions"><span class="msg-time">${clock(ts)}</span><button class="act" data-copy-user aria-label="Copy message">${icon('i-copy')}Copy</button></div>`;
+  el._text = text;
   innerThread().appendChild(el);
 }
 
@@ -3131,6 +3133,11 @@ document.addEventListener('click', async (e) => {
     const ok = await copyText($('pre', el.closest('.codeblock')).innerText);
     el.innerHTML = `${icon(ok ? 'i-check' : 'i-alert')}${ok ? 'Copied' : 'Failed'}`;
     setTimeout(() => { el.innerHTML = `${icon('i-copy')}Copy`; }, 1600);
+    return;
+  }
+  if ((el = q('[data-copy-user]'))) {
+    const ok = await copyText(el.closest('.msg')._text || '');
+    toast(ok ? 'Message copied' : 'Copy failed', ok ? 'ok' : 'err');
     return;
   }
   if ((el = q('[data-copy-msg]'))) {

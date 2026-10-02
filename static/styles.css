@@ -235,7 +235,8 @@ body[data-mode="thread"] .tabbar { display: none; }
   max-width: min(84%, 560px); padding: 10px 14px; border-radius: 20px 20px 6px 20px;
   background: #1c1c24; white-space: pre-wrap; word-break: break-word;
 }
-.msg.user .msg-time { display: none; }
+.msg.user .msg-actions { margin: -2px -6px 0 0; align-items: center; }
+.msg.user .msg-time { padding: 0 2px 0 0; }
 .msg-time { font-size: 12px; color: var(--text-3); padding: 0 4px; }
 
 /* Assistant replies are plain text under a small agent label — no card, full width on phones. */
