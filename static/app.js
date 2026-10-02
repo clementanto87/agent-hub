@@ -1862,6 +1862,49 @@ function vcSyncMute() {
   b.setAttribute('aria-label', vc.muted ? 'Unmute spoken replies' : 'Mute spoken replies');
 }
 
+function vcIsStreamHealthy() {
+  if (!vc.stream || !vc.stream.active) return false;
+  const tracks = vc.stream.getAudioTracks();
+  if (!tracks || !tracks.length) return false;
+  return tracks.some((t) => t.readyState === 'live' && !t.muted);
+}
+
+async function vcEnsureStream() {
+  if (vcIsStreamHealthy()) {
+    if (vc.ctx && vc.ctx.state === 'suspended') {
+      try { await vc.ctx.resume(); } catch {}
+    }
+    return true;
+  }
+  try {
+    if (vc.stream) {
+      try { vc.stream.getTracks().forEach((t) => t.stop()); } catch {}
+    }
+    vc.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) {
+      if (!vc.ctx || vc.ctx.state === 'closed') {
+        vc.ctx = new AC();
+      } else if (vc.ctx.state === 'suspended') {
+        try { await vc.ctx.resume(); } catch {}
+      }
+      try {
+        vc.analyser = vc.ctx.createAnalyser();
+        vc.analyser.fftSize = 1024;
+        vc.ctx.createMediaStreamSource(vc.stream).connect(vc.analyser);
+      } catch (e) {
+        console.warn('AudioContext setup error', e);
+      }
+    }
+    return true;
+  } catch (err) {
+    console.warn('Failed to acquire voice stream:', err);
+    return false;
+  }
+}
+
 async function voiceOpen() {
   unlockAudio();                                 // must happen synchronously inside the tap
   if (document.activeElement && typeof document.activeElement.blur === 'function') {
@@ -1878,23 +1921,10 @@ async function voiceOpen() {
     const va = store.get('voiceAgent', 'claude');
     setAgent(AGENTS[va] && va !== 'bash' ? va : 'claude');
   }
-  try {
-    vc.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-  } catch (err) {
-    toast(err && err.name === 'NotAllowedError' ? 'Microphone permission denied' : 'Could not access the microphone', 'err');
+  const ok = await vcEnsureStream();
+  if (!ok) {
+    toast('Could not access the microphone', 'err');
     return;
-  }
-  const AC = window.AudioContext || window.webkitAudioContext;
-  if (AC) {
-    try {
-      vc.ctx = new AC();
-      if (vc.ctx.state === 'suspended') vc.ctx.resume();
-      vc.analyser = vc.ctx.createAnalyser();
-      vc.analyser.fftSize = 1024;
-      vc.ctx.createMediaStreamSource(vc.stream).connect(vc.analyser);
-    } catch (e) {
-      console.warn('AudioContext setup error', e);
-    }
   }
   try { if (navigator.wakeLock) vc.wake = await navigator.wakeLock.request('screen'); } catch { /* optional */ }
 
@@ -1918,9 +1948,15 @@ function voiceClose() {
   stopSpeaking();
   if (state.streaming) detachStreaming();      // the agent keeps working; the reply lands in the chat
   clearInterval(vc.tt);
-  if (vc.stream) vc.stream.getTracks().forEach((t) => t.stop());
-  if (vc.ctx) vc.ctx.close().catch(() => {});
-  if (vc.wake) vc.wake.release().catch(() => {});
+  if (vc.stream) {
+    try { vc.stream.getTracks().forEach((t) => t.stop()); } catch {}
+  }
+  if (vc.ctx) {
+    try { vc.ctx.close().catch(() => {}); } catch {}
+  }
+  if (vc.wake) {
+    try { vc.wake.release().catch(() => {}); } catch {}
+  }
   vc.stream = vc.ctx = vc.analyser = vc.recorder = vc.wake = null;
   $('#voice').hidden = true;
   vcPhase('idle');
@@ -1928,8 +1964,14 @@ function voiceClose() {
   scrollToBottom(true);
 }
 
-function vcListen() {
+async function vcListen() {
   if (!vc.open) return;
+  const ok = await vcEnsureStream();
+  if (!ok) {
+    vcPhase('idle', 'Tap to talk');
+    toast('Microphone disconnected — tap to talk', 'err');
+    return;
+  }
   vc.chunks = []; vc.heard = false; vc.cancelled = false;
   vc.t0 = vc.lastVoice = performance.now();
   vc.floor = 0.006;
@@ -1942,7 +1984,14 @@ function vcListen() {
   vc.recorder.ondataavailable = (e) => { if (e.data && e.data.size) vc.chunks.push(e.data); };
   const run = vc.run;
   vc.recorder.onstop = () => vcHandleAudio(run);
-  vc.recorder.start(250);
+  try {
+    vc.recorder.start(250);
+  } catch (e) {
+    console.warn('MediaRecorder start error:', e);
+    vc.stream = null;
+    vcPhase('idle', 'Tap to talk');
+    return;
+  }
   vcPhase('listening');
   haptic(6);
   if (vc.analyser) vcMeter(run);
@@ -2121,10 +2170,15 @@ function vcSpeakFallback(chunks, run) {
   next();
 }
 
-function vcOrbTap() {
+async function vcOrbTap() {
   unlockAudio();
   haptic(10);
   if (vc.phase === 'idle') {
+    const ok = await vcEnsureStream();
+    if (!ok) {
+      toast('Microphone unavailable — please tap again or grant permission', 'err');
+      return;
+    }
     vcListen();
   } else if (vc.phase === 'listening') {
     vc.heard = true;
@@ -2133,10 +2187,12 @@ function vcOrbTap() {
   } else if (vc.phase === 'thinking') {
     vc.run++;
     if (state.streaming) stopStreaming();
-    vcPhase('idle');
+    vcPhase('idle', 'Tap to talk');
   } else if (vc.phase === 'speaking') {
     stopSpeaking();
-    vcListen();
+    const ok = await vcEnsureStream();
+    if (ok) vcListen();
+    else vcPhase('idle', 'Tap to talk');
   }
 }
 
@@ -3091,7 +3147,53 @@ $('#prefSound')?.addEventListener('change', (e) => {
 $('#prefEnter')?.addEventListener('change', (e) => { state.prefs.enter = e.target.checked; store.set('pref.enter', e.target.checked); updateHint(); });
 $('#prefHaptics')?.addEventListener('change', (e) => { state.prefs.haptics = e.target.checked; store.set('pref.haptics', e.target.checked); haptic(12); });
 
-document.addEventListener('visibilitychange', () => { syncMonitorPolling(); if (!document.hidden) checkForUpdate(); if (!document.hidden) { checkTunnel(); if (state.tab === 'history') loadSessions(true); } });
+document.addEventListener('visibilitychange', () => {
+  syncMonitorPolling();
+  if (document.hidden) {
+    // App backgrounded or screen locked: stop recording so hardware microphone is cleanly released
+    if (vc.open) {
+      if (vc.phase === 'listening') {
+        vc.cancelled = true;
+        vcStopListening();
+        vcPhase('idle', 'Tap to talk');
+      }
+      if (vc.stream) {
+        try { vc.stream.getTracks().forEach((t) => t.stop()); } catch {}
+        vc.stream = null;
+      }
+    }
+    if (voice.active) {
+      cancelMic();
+    }
+  } else {
+    // App foregrounded / unlocked: resume audio subsystem and ensure idle state
+    unlockAudio();
+    checkForUpdate();
+    checkTunnel();
+    if (state.tab === 'history') loadSessions(true);
+    if (vc.open) {
+      if (vc.phase === 'listening') {
+        vcPhase('idle', 'Tap to talk');
+      }
+      if (vc.ctx && vc.ctx.state === 'suspended') {
+        try { vc.ctx.resume(); } catch {}
+      }
+    }
+  }
+});
+
+window.addEventListener('pageshow', () => {
+  unlockAudio();
+  if (vc.open && vc.ctx && vc.ctx.state === 'suspended') {
+    try { vc.ctx.resume(); } catch {}
+  }
+});
+
+window.addEventListener('focus', () => {
+  if (vc.open && vc.ctx && vc.ctx.state === 'suspended') {
+    try { vc.ctx.resume(); } catch {}
+  }
+});
 window.addEventListener('online', () => { setConn(true); checkTunnel(); });
 window.addEventListener('offline', () => setConn(false));
 window.addEventListener('resize', () => { if (state.tab === 'terminal' && fit) { try { fit.fit(); } catch {} } });
