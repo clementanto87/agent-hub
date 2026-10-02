@@ -2932,7 +2932,7 @@ function openSkillAiGenerator() {
       try {
         const res = await api('/api/skills/generate', { method: 'POST', body: JSON.stringify({ prompt: p }) });
         closeSheet();
-        openSkillCreator({ name: res.name, description: res.description, content: res.content });
+        openSkillCreator({ name: res?.name || '', description: res?.description || '', content: res?.content || '' });
       } catch (err) {
         toast('Generation failed: ' + err.message, 'err');
         e.target.disabled = false;
@@ -3017,7 +3017,7 @@ function openMcpAiGenerator() {
       try {
         const res = await api('/api/mcp/generate', { method: 'POST', body: JSON.stringify({ prompt: p }) });
         closeSheet();
-        openMcpCreator({ name: res.name, command: res.command, args: res.args, env: res.env });
+        openMcpCreator({ name: res?.name || '', command: res?.command || '', args: res?.args || [], env: res?.env || {} });
       } catch (err) {
         toast('Generation failed: ' + err.message, 'err');
         e.target.disabled = false;

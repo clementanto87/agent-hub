@@ -683,6 +683,8 @@ async def generate_mcp_endpoint(request: Request):
     if not prompt:
         return JSONResponse({"error": "Prompt is required"}, status_code=400)
     res = await asyncio.to_thread(skills_mcp_service.generate_mcp_ai, prompt)
+    return res
+
 @app.get("/auth/google")
 async def auth_google_page(request: Request):
     from services import google_auth_service
