@@ -181,23 +181,85 @@ def delete_skill(name: str) -> bool:
             deleted = True
     return deleted
 
+def _run_ai_completion(prompt: str, sys_instruction: str, json_mode: bool = False) -> str:
+    # 1. Try Gemini if API key is present
+    if API_KEY:
+        try:
+            client = genai.Client(api_key=API_KEY)
+            cfg_args = {"system_instruction": sys_instruction, "temperature": 0.3}
+            if json_mode:
+                cfg_args["response_mime_type"] = "application/json"
+            res = client.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=prompt,
+                config=types.GenerateContentConfig(**cfg_args)
+            )
+            if res.text:
+                return res.text.strip()
+        except Exception:
+            pass
+
+    # 2. Try Claude CLI (Fast, pre-authenticated locally)
+    try:
+        full_p = f"{sys_instruction}\n\nTask: {prompt}"
+        proc = subprocess.run(
+            ["claude", "-p", full_p],
+            cwd="/root/Documents/antigravity/clever-einstein",
+            capture_output=True,
+            text=True,
+            timeout=18
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+    except Exception:
+        pass
+
+    # 3. Try Codex CLI (Pre-authenticated locally)
+    try:
+        full_p = f"{sys_instruction}\n\nTask: {prompt}"
+        proc = subprocess.run(
+            ["codex", "exec", "-C", "/root/Documents/antigravity/clever-einstein", full_p],
+            capture_output=True,
+            text=True,
+            timeout=22
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            out = proc.stdout.strip()
+            if "codex\n" in out:
+                out = out.split("codex\n", 1)[1]
+            if "\ntokens used" in out:
+                out = out.rsplit("\ntokens used", 1)[0]
+            return out.strip()
+    except Exception:
+        pass
+
+    return ""
+
 def generate_skill_ai(prompt: str, agent: str = "antigravity") -> Dict[str, str]:
-    client = genai.Client(api_key=API_KEY)
     sys_instruction = (
         "You are an expert AI agent customizer creating an autonomous Skill definition. "
         "Output ONLY a valid SKILL.md file with YAML frontmatter at the top: \n"
         "---\nname: <kebab-case-name>\ndescription: <Clear one-line trigger summary for when agents should activate this skill>\n---\n\n"
         "Follow with clear, step-by-step markdown instructions, tools/CLIs to use, rules, and example workflows."
     )
-    res = client.models.generate_content(
-        model='gemini-3.1-flash-lite',
-        contents=f"Create a production-ready agent skill based on this requirement: {prompt}",
-        config=types.GenerateContentConfig(
-            system_instruction=sys_instruction,
-            temperature=0.3
+    raw = _run_ai_completion(f"Create a production-ready agent skill based on this requirement: {prompt}", sys_instruction)
+
+    # If AI generation produced nothing, use deterministic template
+    if not raw:
+        clean_name = re.sub(r'[^a-zA-Z0-9_-]', '-', prompt.strip().lower())[:30].strip('-') or "custom-skill"
+        raw = (
+            f"---\n"
+            f"name: {clean_name}\n"
+            f"description: Skill for {prompt.strip()}\n"
+            f"---\n\n"
+            f"# {clean_name.replace('-', ' ').title()}\n\n"
+            f"This skill equips the agent to perform: {prompt.strip()}.\n\n"
+            f"## Instructions\n"
+            f"1. Check required prerequisites and installed command-line tools.\n"
+            f"2. Execute commands with appropriate arguments.\n"
+            f"3. Verify execution output and report back to the user.\n"
         )
-    )
-    raw = res.text or ""
+
     # Extract name and description
     name_match = re.search(r"name:\s*([a-zA-Z0-9_-]+)", raw)
     name = name_match.group(1) if name_match else "custom-skill"
@@ -337,36 +399,91 @@ def delete_mcp_server(name: str) -> bool:
     return removed
 
 def generate_mcp_ai(prompt: str) -> Dict[str, Any]:
-    client = genai.Client(api_key=API_KEY)
     sys_instruction = (
         "You are an expert in Model Context Protocol (MCP) server configurations. "
-        "Given a user request (e.g. Postgres, SQLite, GitHub, Filesystem, Google Drive, Docker), output ONLY valid JSON matching this schema:\n"
+        "Given a user request (e.g. Brave Web Search, Postgres, SQLite, GitHub, Filesystem, Google Drive, Docker), output ONLY valid JSON matching this schema:\n"
         "{\n"
         '  "name": "server-name",\n'
         '  "type": "stdio",\n'
-        '  "command": "npx" or "python3" or path,\n'
-        '  "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://..."],\n'
+        '  "command": "npx",\n'
+        '  "args": ["-y", "@modelcontextprotocol/server-..."],\n'
         '  "env": {"KEY": "VALUE"},\n'
         '  "description": "Short summary of what this MCP server provides"\n'
         "}"
     )
-    res = client.models.generate_content(
-        model='gemini-3.1-flash-lite',
-        contents=f"Generate an MCP server configuration for: {prompt}",
-        config=types.GenerateContentConfig(
-            system_instruction=sys_instruction,
-            response_mime_type="application/json",
-            temperature=0.2
-        )
-    )
-    try:
-        return json.loads(res.text or "{}")
-    except Exception:
+    raw = _run_ai_completion(f"Generate an MCP server configuration for: {prompt}", sys_instruction, json_mode=True)
+    if raw:
+        try:
+            # Clean JSON if wrapped in markdown code blocks
+            m = re.search(r'(\{.*\})', raw, re.DOTALL)
+            if m:
+                return json.loads(m.group(1))
+        except Exception:
+            pass
+
+    # Deterministic rule-based templates for known MCP services
+    p_lower = prompt.lower()
+    if any(w in p_lower for w in ["search", "websearch", "brave", "google", "web"]):
         return {
-            "name": "custom-mcp",
+            "name": "brave-search",
             "type": "stdio",
             "command": "npx",
-            "args": ["-y", prompt],
+            "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+            "env": {"BRAVE_API_KEY": "${BRAVE_API_KEY}"},
+            "description": "Live web search MCP server using Brave Search API."
+        }
+    elif "postgres" in p_lower or "psql" in p_lower:
+        return {
+            "name": "postgres",
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"],
             "env": {},
-            "description": f"MCP server for {prompt}"
+            "description": "PostgreSQL database query and schema exploration MCP."
+        }
+    elif "sqlite" in p_lower:
+        return {
+            "name": "sqlite",
+            "type": "stdio",
+            "command": "uvx",
+            "args": ["mcp-server-sqlite", "--db-path", "/root/workspace/data.sqlite"],
+            "env": {},
+            "description": "SQLite database reader and query MCP."
+        }
+    elif "github" in p_lower:
+        return {
+            "name": "github",
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-github"],
+            "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"},
+            "description": "GitHub repository, issues, and pull request management MCP."
+        }
+    elif "puppeteer" in p_lower or "browser" in p_lower:
+        return {
+            "name": "puppeteer",
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+            "env": {},
+            "description": "Headless browser automation and web page interaction MCP."
+        }
+    elif "filesystem" in p_lower or "file" in p_lower:
+        return {
+            "name": "filesystem",
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/root"],
+            "env": {},
+            "description": "Local filesystem access and file management MCP."
+        }
+    else:
+        clean_name = re.sub(r'[^a-zA-Z0-9_-]', '-', prompt.strip().lower())[:25].strip('-') or "custom-mcp"
+        return {
+            "name": clean_name,
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", f"@modelcontextprotocol/server-{clean_name}"],
+            "env": {},
+            "description": f"MCP server configuration for {prompt.strip()}"
         }
