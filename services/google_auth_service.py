@@ -4,6 +4,7 @@ import time
 import re
 import urllib.parse
 import requests
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 
 CLIENT_SECRET_PATH = "/root/.config/gws/client_secret.json"
@@ -11,10 +12,21 @@ CREDENTIALS_JSON_PATH = "/root/.config/gws/credentials.json"
 TOKEN_CACHE_PATH = "/root/.config/gws/token_cache.json"
 
 SCOPES = [
+    # Gmail
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.modify",
+    # Google Drive & Docs / Sheets
     "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/spreadsheets",
+    # Google Calendar & Tasks
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/tasks",
+    # Contacts & Profile
+    "https://www.googleapis.com/auth/contacts.readonly",
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile"
@@ -56,13 +68,11 @@ def exchange_code_for_tokens(raw_input: str, redirect_uri: str = "http://localho
         return {"success": False, "error": "Missing client credentials"}
 
     code = raw_input.strip()
-    # Check if a full URL was pasted
     if "code=" in code:
         m = re.search(r"code=([^&]+)", code)
         if m:
             code = urllib.parse.unquote(m.group(1))
 
-    # Try token exchange with http://localhost first (standard for desktop apps)
     uris_to_try = ["http://localhost", "http://localhost/", redirect_uri, "http://localhost:8080/auth/google/callback", "http://127.0.0.1:8080/auth/google/callback"]
     last_error = ""
 
@@ -114,7 +124,7 @@ def load_access_token() -> Optional[str]:
         saved_at = tokens.get("saved_at", 0)
         expires_in = tokens.get("expires_in", 3600)
 
-        # Refresh if token expired or expiring soon
+        # Refresh token if expiring within 5 minutes
         if time.time() - saved_at > (expires_in - 300) and refresh_token:
             secrets = load_client_secrets()
             data = {
@@ -135,11 +145,20 @@ def load_access_token() -> Optional[str]:
     except Exception:
         return None
 
-def search_gmail_messages(query: str = "is:unread", max_results: int = 10) -> List[Dict[str, Any]]:
+def _get_headers() -> Optional[Dict[str, str]]:
     token = load_access_token()
     if not token:
+        return None
+    return {"Authorization": f"Bearer {token}"}
+
+# ════════════════════════════════════════════════════════════
+# 1. GMAIL OPERATIONS
+# ════════════════════════════════════════════════════════════
+
+def search_gmail_messages(query: str = "is:unread", max_results: int = 10) -> List[Dict[str, Any]]:
+    headers = _get_headers()
+    if not headers:
         return []
-    headers = {"Authorization": f"Bearer {token}"}
     params = {"q": query, "maxResults": max_results}
     try:
         resp = requests.get("https://gmail.googleapis.com/gmail/v1/users/me/messages", headers=headers, params=params, timeout=10)
@@ -162,5 +181,85 @@ def search_gmail_messages(query: str = "is:unread", max_results: int = 10) -> Li
                     "date": headers_dict.get("Date", "")
                 })
         return messages
+    except Exception:
+        return []
+
+# ════════════════════════════════════════════════════════════
+# 2. GOOGLE DRIVE & DOCS OPERATIONS
+# ════════════════════════════════════════════════════════════
+
+def list_drive_files(query: Optional[str] = None, page_size: int = 15) -> List[Dict[str, Any]]:
+    headers = _get_headers()
+    if not headers:
+        return []
+    params = {"pageSize": page_size, "fields": "files(id, name, mimeType, modifiedTime, size, webViewLink)"}
+    if query:
+        params["q"] = query
+    try:
+        resp = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=params, timeout=10)
+        if resp.status_code == 200:
+            return resp.json().get("files", [])
+        return []
+    except Exception:
+        return []
+
+# ════════════════════════════════════════════════════════════
+# 3. GOOGLE CALENDAR OPERATIONS
+# ════════════════════════════════════════════════════════════
+
+def list_calendar_events(time_min: Optional[str] = None, max_results: int = 10) -> List[Dict[str, Any]]:
+    headers = _get_headers()
+    if not headers:
+        return []
+    if not time_min:
+        time_min = datetime.now(timezone.utc).isoformat()
+    params = {
+        "timeMin": time_min,
+        "maxResults": max_results,
+        "singleEvents": "true",
+        "orderBy": "startTime"
+    }
+    try:
+        resp = requests.get("https://www.googleapis.com/calendar/v3/calendars/primary/events", headers=headers, params=params, timeout=10)
+        if resp.status_code == 200:
+            events = []
+            for item in resp.json().get("items", []):
+                start = item.get("start", {}).get("dateTime") or item.get("start", {}).get("date")
+                end = item.get("end", {}).get("dateTime") or item.get("end", {}).get("date")
+                events.append({
+                    "id": item.get("id"),
+                    "summary": item.get("summary", "(No Title)"),
+                    "start": start,
+                    "end": end,
+                    "location": item.get("location", ""),
+                    "description": item.get("description", "")
+                })
+            return events
+        return []
+    except Exception:
+        return []
+
+# ════════════════════════════════════════════════════════════
+# 4. GOOGLE TASKS OPERATIONS
+# ════════════════════════════════════════════════════════════
+
+def list_tasks(max_results: int = 20) -> List[Dict[str, Any]]:
+    headers = _get_headers()
+    if not headers:
+        return []
+    try:
+        resp = requests.get("https://tasks.googleapis.com/tasks/v1/lists/@default/tasks", headers=headers, params={"maxResults": max_results}, timeout=10)
+        if resp.status_code == 200:
+            items = []
+            for t in resp.json().get("items", []):
+                items.append({
+                    "id": t.get("id"),
+                    "title": t.get("title", ""),
+                    "status": t.get("status", ""),
+                    "due": t.get("due", ""),
+                    "notes": t.get("notes", "")
+                })
+            return items
+        return []
     except Exception:
         return []
