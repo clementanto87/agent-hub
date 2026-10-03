@@ -1256,13 +1256,21 @@ function folderHead(ws, count) {
 function chatRow(s) {
   const a = AGENTS[s.agent] || AGENTS.antigravity;
   return `
-    <button class="chat-row" data-open="${esc(s.id)}">
-      <span class="dot" style="--agent:${a.color}"></span>
-      <span class="chat-row-main">
-        <span class="chat-row-title">${esc(s.title || 'Untitled')}</span>
-        <span class="chat-row-meta">${esc(a.name)} · ${esc(relTime(s.updated_at))}</span>
-      </span>
-    </button>`;
+    <div class="swipe-row chat-swipe-row" data-sess-id="${esc(s.id)}">
+      <div class="swipe-actions">
+        <button class="swipe-del-btn" data-del="${esc(s.id)}" aria-label="Delete conversation" title="Delete conversation">
+          ${icon('i-trash')}
+          <span>Delete</span>
+        </button>
+      </div>
+      <div class="chat-row" data-open="${esc(s.id)}" role="button" tabindex="0">
+        <span class="dot" style="--agent:${a.color}"></span>
+        <span class="chat-row-main">
+          <span class="chat-row-title">${esc(s.title || 'Untitled')}</span>
+          <span class="chat-row-meta">${esc(a.name)} · ${esc(relTime(s.updated_at))}</span>
+        </span>
+      </div>
+    </div>`;
 }
 
 // The Chats home: what is running now, then recent conversations (by folder or by date).
@@ -2670,17 +2678,26 @@ async function loadSessions(quiet = false) {
 
 function sessRow(s) {
   return `
-        <div class="sess ${s.id === state.sessionId ? 'current' : ''}" data-open="${esc(s.id)}" role="button" tabindex="0">
-          <span class="dot" style="--agent:${(AGENTS[s.agent] || AGENTS.antigravity).color}"></span>
-          <div class="sess-main">
-            <div class="sess-title">${esc(s.title || 'Untitled')}</div>
-            <div class="sess-meta">${esc((AGENTS[s.agent] || { name: s.agent }).name)} · ${state.running.has(s.id) ? '<span class="sess-run">Running…</span>' : relTime(s.updated_at)}</div>
-          </div>
-          <button class="sess-del" data-del="${esc(s.id)}" aria-label="Delete conversation">${icon('i-trash')}</button>
-        </div>`;
+    <div class="swipe-row sess-swipe-row" data-sess-id="${esc(s.id)}">
+      <div class="swipe-actions">
+        <button class="swipe-del-btn" data-del="${esc(s.id)}" aria-label="Delete conversation" title="Delete conversation">
+          ${icon('i-trash')}
+          <span>Delete</span>
+        </button>
+      </div>
+      <div class="sess ${s.id === state.sessionId ? 'current' : ''}" data-open="${esc(s.id)}" role="button" tabindex="0">
+        <span class="dot" style="--agent:${(AGENTS[s.agent] || AGENTS.antigravity).color}"></span>
+        <div class="sess-main">
+          <div class="sess-title">${esc(s.title || 'Untitled')}</div>
+          <div class="sess-meta">${esc((AGENTS[s.agent] || { name: s.agent }).name)} · ${state.running.has(s.id) ? '<span class="sess-run">Running…</span>' : relTime(s.updated_at)}</div>
+        </div>
+        <button class="sess-del" data-del="${esc(s.id)}" aria-label="Delete conversation">${icon('i-trash')}</button>
+      </div>
+    </div>`;
 }
 
 function renderHistory() {
+  if (activeSwipedRow && !activeSwipedRow.isConnected) activeSwipedRow = null;
   const q = $('#historySearch').value.trim().toLowerCase();
   const list = state.sessions.filter((s) => !q || (s.title || '').toLowerCase().includes(q) || (s.agent || '').toLowerCase().includes(q) || (s.workspace || '').toLowerCase().includes(q));
   const el = $('#sessionList');
@@ -2727,9 +2744,206 @@ function renderRail() {
     + `<div class="rail-section-title rail-head">${state.groupBy === 'folder' ? 'By folder' : 'Recent'}${groupToggle()}</div>` + body;
 }
 
+/* ── iPhone-style Swipe to Delete ────────────────────────── */
+let activeSwipedRow = null;
+let isSuppressingClick = false;
+let suppressClickTimer = null;
+
+let swipeState = {
+  row: null,
+  content: null,
+  startX: 0,
+  startY: 0,
+  startTime: 0,
+  initialX: 0,
+  currentX: 0,
+  isSwiping: false,
+  isScrolling: false,
+  directionLocked: false,
+  pointerId: null,
+  fullSwipeTriggered: false
+};
+
+function closeSwipedRow(row) {
+  if (!row) return;
+  const content = row.querySelector('.sess, .chat-row');
+  if (content) {
+    content.style.transition = 'transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1)';
+    content.style.transform = 'translateX(0)';
+  }
+  delete row.dataset.swiped;
+  row.classList.remove('is-swiping', 'full-swipe');
+}
+
+function initSwipeToDelete() {
+  document.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (e.target.closest('.swipe-del-btn, .sess-del, [data-del]')) return;
+
+    const row = e.target.closest('.swipe-row');
+    if (!row) {
+      if (activeSwipedRow) {
+        closeSwipedRow(activeSwipedRow);
+        activeSwipedRow = null;
+      }
+      return;
+    }
+
+    if (activeSwipedRow && activeSwipedRow !== row) {
+      closeSwipedRow(activeSwipedRow);
+      activeSwipedRow = null;
+    }
+
+    const content = row.querySelector('.sess, .chat-row');
+    if (!content) return;
+
+    const isOpen = row.dataset.swiped === 'true';
+    const initialX = isOpen ? -84 : 0;
+
+    swipeState = {
+      row,
+      content,
+      startX: e.clientX,
+      startY: e.clientY,
+      startTime: Date.now(),
+      initialX,
+      currentX: initialX,
+      isSwiping: false,
+      isScrolling: false,
+      directionLocked: false,
+      pointerId: e.pointerId,
+      fullSwipeTriggered: false
+    };
+  }, { passive: true });
+
+  document.addEventListener('pointermove', (e) => {
+    if (!swipeState.row || swipeState.isScrolling) return;
+    if (swipeState.pointerId !== null && e.pointerId !== swipeState.pointerId) return;
+
+    const dx = e.clientX - swipeState.startX;
+    const dy = e.clientY - swipeState.startY;
+
+    if (!swipeState.directionLocked) {
+      if (Math.hypot(dx, dy) < 6) return;
+      swipeState.directionLocked = true;
+
+      if (Math.abs(dy) >= Math.abs(dx)) {
+        swipeState.isScrolling = true;
+        if (activeSwipedRow && activeSwipedRow === swipeState.row) {
+          closeSwipedRow(activeSwipedRow);
+          activeSwipedRow = null;
+        }
+        return;
+      } else {
+        swipeState.isSwiping = true;
+        swipeState.row.classList.add('is-swiping');
+        try {
+          swipeState.row.setPointerCapture(e.pointerId);
+        } catch {}
+      }
+    }
+
+    if (!swipeState.isSwiping) return;
+
+    let nextX = swipeState.initialX + dx;
+    if (nextX > 0) {
+      nextX = nextX * 0.15;
+    }
+
+    const fullSwipeThreshold = Math.min(-170, -(swipeState.row.offsetWidth * 0.48));
+    if (nextX <= fullSwipeThreshold && !swipeState.fullSwipeTriggered) {
+      swipeState.fullSwipeTriggered = true;
+      swipeState.row.classList.add('full-swipe');
+      haptic(15);
+    } else if (nextX > fullSwipeThreshold && swipeState.fullSwipeTriggered) {
+      swipeState.fullSwipeTriggered = false;
+      swipeState.row.classList.remove('full-swipe');
+    }
+
+    swipeState.currentX = nextX;
+    swipeState.content.style.transition = 'none';
+    swipeState.content.style.transform = `translateX(${nextX}px)`;
+  });
+
+  const onPointerEnd = (e) => {
+    if (!swipeState.row) return;
+    if (swipeState.pointerId !== null && e.pointerId !== swipeState.pointerId) return;
+
+    const { row, content, isSwiping, initialX, currentX, fullSwipeTriggered, startTime } = swipeState;
+
+    if (isSwiping) {
+      isSuppressingClick = true;
+      clearTimeout(suppressClickTimer);
+      suppressClickTimer = setTimeout(() => { isSuppressingClick = false; }, 220);
+
+      try {
+        if (e.pointerId !== null) row.releasePointerCapture(e.pointerId);
+      } catch {}
+
+      const dx = currentX - initialX;
+      const dt = Math.max(1, Date.now() - startTime);
+      const vx = dx / dt;
+
+      if (fullSwipeTriggered || currentX < Math.min(-180, -(row.offsetWidth * 0.5))) {
+        content.style.transition = 'transform 0.25s cubic-bezier(0.2, 0.9, 0.3, 1)';
+        content.style.transform = 'translateX(-100%)';
+        activeSwipedRow = null;
+        delete row.dataset.swiped;
+        row.classList.remove('is-swiping', 'full-swipe');
+        const id = row.dataset.sessId;
+        if (id) deleteSession(id);
+      } else if (currentX < -38 || vx < -0.3) {
+        content.style.transition = 'transform 0.32s cubic-bezier(0.18, 0.89, 0.32, 1.15)';
+        content.style.transform = 'translateX(-84px)';
+        row.dataset.swiped = 'true';
+        row.classList.remove('is-swiping', 'full-swipe');
+        activeSwipedRow = row;
+        haptic(8);
+      } else {
+        closeSwipedRow(row);
+        if (activeSwipedRow === row) activeSwipedRow = null;
+      }
+    }
+
+    swipeState.row = null;
+    swipeState.content = null;
+    swipeState.isSwiping = false;
+    swipeState.isScrolling = false;
+    swipeState.directionLocked = false;
+    swipeState.pointerId = null;
+    swipeState.fullSwipeTriggered = false;
+  };
+
+  document.addEventListener('pointerup', onPointerEnd);
+  document.addEventListener('pointercancel', onPointerEnd);
+
+  window.addEventListener('scroll', () => {
+    if (activeSwipedRow) {
+      closeSwipedRow(activeSwipedRow);
+      activeSwipedRow = null;
+    }
+  }, { passive: true, capture: true });
+}
+
 async function deleteSession(id) {
+  const row = document.querySelector(`.swipe-row[data-sess-id="${id}"]`);
   const ok = await confirmSheet({ title: 'Delete conversation?', message: 'This removes it from history permanently.', confirm: 'Delete', danger: true });
-  if (!ok) return;
+  if (!ok) {
+    if (row) closeSwipedRow(row);
+    return;
+  }
+  if (row) {
+    row.style.transition = 'max-height 0.28s ease, margin 0.28s ease, opacity 0.25s ease, transform 0.25s ease';
+    row.style.maxHeight = row.offsetHeight + 'px';
+    void row.offsetHeight;
+    row.style.maxHeight = '0px';
+    row.style.marginTop = '0px';
+    row.style.marginBottom = '0px';
+    row.style.opacity = '0';
+    row.style.pointerEvents = 'none';
+    row.style.transform = 'scale(0.96)';
+    await new Promise((r) => setTimeout(r, 260));
+  }
   try {
     await api(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
     if (id === state.sessionId) newChatSilently();
@@ -3072,6 +3286,10 @@ function openMcpAiGenerator() {
         e.target.disabled = false;
         e.target.textContent = 'Generate Config';
       }
+    });
+  });
+}
+
 async function openVaultSheet() {
   openSheet(`
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
@@ -3388,9 +3606,33 @@ const actions = {
 };
 
 document.addEventListener('click', async (e) => {
+  if (isSuppressingClick) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    return;
+  }
+
   const t = e.target;
   const q = (s) => t.closest(s);
   let el;
+
+  const clickedSwipeRow = q('.swipe-row');
+  if (clickedSwipeRow && clickedSwipeRow.dataset.swiped === 'true') {
+    if (q('.swipe-del-btn, .sess-del, [data-del]')) {
+      // Tap delete button -> let data-del handle it
+    } else {
+      // Tap row body to dismiss swipe -> close row, do NOT open chat
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      closeSwipedRow(clickedSwipeRow);
+      activeSwipedRow = null;
+      return;
+    }
+  } else if (activeSwipedRow && !clickedSwipeRow) {
+    // Tap outside open row -> close it
+    closeSwipedRow(activeSwipedRow);
+    activeSwipedRow = null;
+  }
 
   if ((el = q('[data-action]'))) { actions[el.dataset.action]?.(el); return; }
   if ((el = q('[data-tab]'))) { switchTab(el.dataset.tab); return; }
@@ -3564,9 +3806,9 @@ if (chatView) {
   });
 }
 
-// Keyboard activation for history rows
+// Keyboard activation for history and chat rows
 document.addEventListener('keydown', (e) => {
-  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('.sess')) { e.preventDefault(); openSession(e.target.dataset.open); }
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('.sess, .chat-row')) { e.preventDefault(); openSession(e.target.dataset.open); }
 });
 
 // Keep the terminal's on-screen keyboard from stealing focus on key taps
@@ -3718,6 +3960,7 @@ async function boot() {
   updateHint();
   renderEmpty();
   switchTab('chat');
+  initSwipeToDelete();
 
   const draft = store.get('draft', '');
   if (draft) { input.value = draft; }

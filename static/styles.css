@@ -496,6 +496,122 @@ button.row:active { background: var(--surface-3); }
 .search:focus-within { border-color: var(--line-strong); color: var(--text-2); }
 .search input { flex: 1; background: none; border: 0; outline: 0; font-size: 16px; color: var(--text); min-width: 0; }
 .day-label { font-size: 12px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: .08em; padding: 0 6px 8px; }
+
+/* ── iPhone Style Swipe-to-Delete ───────────────────────── */
+.swipe-row {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--r-md);
+  touch-action: pan-y;
+  background: var(--surface-1);
+  user-select: none;
+  -webkit-user-select: none;
+  isolation: isolate;
+}
+.swipe-row + .swipe-row {
+  margin-top: 6px;
+}
+.hist-group .swipe-row + .swipe-row {
+  margin-top: 6px;
+}
+.swipe-row.is-swiping,
+.swipe-row[data-swiped="true"] {
+  background: #ff3b30;
+}
+.swipe-row.chat-swipe-row {
+  border-radius: 12px;
+  margin: 3px 0;
+  background: var(--surface-1);
+}
+.folder-group-card .chat-swipe-row {
+  margin: 2px -4px;
+  border-radius: 10px;
+}
+.swipe-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 84px;
+  background: #ff3b30;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  z-index: 1;
+  pointer-events: auto;
+  transition: width 0.18s ease;
+}
+.swipe-del-btn {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-family: inherit;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.12s ease, opacity 0.12s ease;
+}
+.swipe-del-btn .i {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2.2;
+}
+.swipe-del-btn span {
+  font-size: 11px;
+  line-height: 1.2;
+}
+.swipe-del-btn:active {
+  opacity: 0.8;
+  transform: scale(0.92);
+}
+.swipe-row.full-swipe .swipe-actions {
+  width: 100%;
+  justify-content: flex-end;
+  padding-right: 26px;
+}
+.swipe-row.full-swipe .swipe-del-btn {
+  width: auto;
+  transform: scale(1.08);
+}
+.swipe-row > .sess {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  margin-top: 0 !important;
+  background: var(--surface-1);
+  will-change: transform;
+  transform: translateX(0);
+}
+.swipe-row > .chat-row {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  background: var(--surface-1);
+  will-change: transform;
+  transform: translateX(0);
+  border-bottom: 0;
+  padding: 10px 14px;
+  border-radius: inherit;
+  cursor: pointer;
+}
+.folder-group-card .chat-swipe-row > .chat-row {
+  background: var(--surface-1);
+}
+
 .sess { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 10px 12px 14px; text-align: left; background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--r-md); transition: background .15s, border-color .15s; }
 .sess + .sess { margin-top: 6px; }
 .sess:hover { background: var(--surface-2); }
@@ -503,8 +619,25 @@ button.row:active { background: var(--surface-3); }
 .sess-main { flex: 1; min-width: 0; }
 .sess-title { font-weight: 550; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sess-meta { font-size: 12px; color: var(--text-3); margin-top: 1px; }
-.sess-del { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; color: var(--text-3); }
-.sess-del:hover { background: rgba(248, 113, 113, .14); color: var(--danger); }
+
+/* Desktop hover quick delete icon, hidden on touch screens */
+.sess-del {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity .15s ease, background .15s ease, color .15s ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .sess:hover .sess-del { opacity: 0.55; }
+  .sess-del:hover { opacity: 1 !important; background: rgba(248, 113, 113, .16); color: var(--danger); }
+}
+@media (hover: none) {
+  .sess-del { display: none; }
+}
 .skeleton { height: 58px; border-radius: var(--r-md); background: linear-gradient(90deg, var(--surface-1), var(--surface-2), var(--surface-1)); background-size: 200% 100%; animation: shimmer 1.3s linear infinite; }
 
 /* ── Sheets & toasts ────────────────────────────────────── */
