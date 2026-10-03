@@ -1482,7 +1482,10 @@ function extractAllActivities(raw) {
 function renderBody(msgEl, final = false) {
   const { text: stripped, agent } = stripTag(msgEl._raw || '');
   const isShell = msgEl._agentKey === 'bash' || agent === 'bash';
-  const cleanText = (stripped || '').replace(/<!--\s*ACTIVITY:[\s\S]*?-->/g, '').trim();
+  const cleanText = (stripped || '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<!--[\s\S]*$/g, '')
+    .trim();
   const text = isShell ? formatShell(cleanText) : cleanText;
   const body = $('.msg-body', msgEl);
   if (!body) return;
@@ -2325,11 +2328,15 @@ async function vcHandleAudio(run) {
   vcSpeak(spoken.chunks, run);
 }
 
-// Turn a markdown reply into short speakable chunks (sentences), skipping code.
+// Turn a markdown reply into short speakable chunks (sentences), skipping code and comments.
 function speakable(md) {
   let t = stripTag(md).text;
-  t = t.replace(/(~{3,}|`{3,})[\s\S]*?\1/g, ' (code omitted) ')
-    .replace(/<[^>]+>/g, '')
+  t = (t || '')
+    .replace(/<!--[\s\S]*?-->/g, '')     // strip complete HTML comments (including JSON containing '>')
+    .replace(/<!--[\s\S]*$/g, '')        // strip in-flight partial comments
+    .replace(/(~{3,}|`{3,})[\s\S]*?\1/g, ' (code omitted) ')
+    .replace(/<[^>]+>/g, '')             // strip HTML tags
+    .replace(/<[^>]*$/g, '')             // strip partial trailing tags
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
@@ -3731,7 +3738,9 @@ document.addEventListener('click', async (e) => {
     return;
   }
   if ((el = q('[data-copy-msg]'))) {
-    const ok = await copyText(stripTag(el.closest('.msg')._raw).text.trim());
+    const raw = el.closest('.msg')._raw || '';
+    const clean = stripTag(raw).text.replace(/<!--[\s\S]*?-->/g, '').replace(/<!--[\s\S]*$/g, '').trim();
+    const ok = await copyText(clean);
     toast(ok ? 'Reply copied' : 'Copy failed', ok ? 'ok' : 'err');
     return;
   }
