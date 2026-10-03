@@ -285,7 +285,7 @@ async function api(path, opts) {
 
 let sheetResolve = null;
 
-function openSheet(html, onMount) {
+function openSheet(html, onMount, opts = {}) {
   const s = $('#sheet');
   const sc = $('#scrim');
   const wasOpen = !s.hidden;
@@ -301,7 +301,8 @@ function openSheet(html, onMount) {
   const mobile = window.innerWidth < 900;
   // Keep the current height when navigating inside an already-open sheet,
   // so going to another folder while expanded doesn't collapse to half.
-  const target = mobile ? (wasFull ? 'full' : 'half') : 'full';
+  // opts.full forces full height (e.g. media that needs room to render).
+  const target = mobile ? (opts.full || wasFull ? 'full' : 'half') : 'full';
 
   const b = $('#sheetBody');
   if (wasOpen) {
@@ -921,6 +922,8 @@ async function openFileSheet(filePath) {
     const lineCount = lines.length;
     const numbered = lines.map((l, i) => `<span class="ln">${i + 1}</span>${esc(l)}`).join('\n');
     const isImage = ['png','jpg','jpeg','gif','webp','svg','ico','bmp'].includes(data.ext);
+    const isPdf = data.is_pdf || data.ext === 'pdf';
+    const rawUrl = `/api/file/raw?path=${encodeURIComponent(data.path)}`;
 
     openSheet(`
       <div class="fv-head">
@@ -929,23 +932,25 @@ async function openFileSheet(filePath) {
           <span class="fv-name">${esc(data.name)}</span>
           <span class="fv-meta">${esc(data.size_fmt)}${lineCount ? ` · ${lineCount} lines` : ''} · ${esc(data.ext || 'file')}</span>
         </div>
-        <button class="icon-btn" data-copy-file-content aria-label="Copy contents">${icon('i-copy')}</button>
+        ${data.is_text ? `<button class="icon-btn" data-copy-file-content aria-label="Copy contents">${icon('i-copy')}</button>` : ''}
       </div>
       <div class="fv-path">${esc(data.path)}</div>
 
-      ${isImage ? `<div class="fv-image"><img src="/api/file/raw?path=${encodeURIComponent(data.path)}" alt="${esc(data.name)}"></div>` :
+      ${isPdf ? `<div class="fv-pdf"><iframe src="${rawUrl}" title="${esc(data.name)}" referrerpolicy="no-referrer"></iframe></div>` :
+        isImage ? `<div class="fv-image"><img src="${rawUrl}" alt="${esc(data.name)}"></div>` :
         data.is_text && data.content !== null ? `<pre class="fv-code">${numbered}</pre>` :
-        `<div class="fv-binary">${esc(data.size_fmt)} binary file</div>`}
+        `<div class="fv-binary">${icon('i-box')}<span>${esc(data.size_fmt)} · can't preview this type</span></div>`}
 
       <div class="fv-actions">
         ${data.is_text ? `<button class="btn" data-fx-edit="${esc(data.path)}">${icon('i-edit')}Edit</button>` : ''}
+        ${isPdf || isImage || !data.is_text ? `<a class="btn" href="${rawUrl}" target="_blank" rel="noopener">${icon('i-globe')}Open</a>` : ''}
         <button class="btn" data-attach-vm-file="${esc(data.path)}" data-name="${esc(data.name)}" data-ext="${esc(data.ext)}" data-size="${esc(data.size_fmt)}">${icon('i-plus')}Attach</button>
         <button class="btn" data-ask-file="${esc(data.path)}">${icon('i-send')}Ask agent</button>
         <button class="btn" data-copy="${esc(data.path)}">${icon('i-copy')}Copy path</button>
       </div>
     `, (body) => {
       body._fileContent = data.content || '';
-    });
+    }, { full: isPdf || isImage });
   } catch (err) {
     toast(err.message || 'Could not load file', 'err');
     openWorkspaceSheet(currentBrowsingPath || '/root');

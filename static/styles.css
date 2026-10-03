@@ -669,6 +669,9 @@ button.row:active { background: var(--surface-3); }
   cursor: grabbing;
 }
 .sheet-body { overflow-y: auto; padding: 10px 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+/* When expanded, let the body fill the sheet so flex:1 content (PDF, image,
+   editor) can stretch to the full height instead of its intrinsic size. */
+.sheet.full .sheet-body { flex: 1; min-height: 0; }
 .sheet h3 { font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
 .sheet .lead { color: var(--text-2); font-size: 14px; margin-top: -6px; }
 .sheet-actions { display: flex; gap: 8px; }
@@ -977,7 +980,11 @@ body.voice-mode .main { visibility: hidden !important; pointer-events: none !imp
 .fv-code .ln { display: inline-block; width: 3ch; margin-right: 12px; text-align: right; color: var(--text-3); user-select: none; opacity: .5; }
 .fv-image { flex: 1; min-height: 0; display: grid; place-items: center; overflow: auto; }
 .fv-image img { max-width: 100%; max-height: 100%; border-radius: 8px; background: var(--surface-1); }
-.fv-binary { flex: 1; display: grid; place-items: center; color: var(--text-3); font-size: 14px; }
+.fv-binary { flex: 1; display: flex; flex-direction: column; gap: 10px; align-items: center; justify-content: center; color: var(--text-3); font-size: 14px; }
+.fv-binary .i { width: 32px; height: 32px; opacity: .6; }
+.fv-pdf { flex: 1; min-height: 300px; border-radius: 12px; overflow: hidden; background: var(--surface-1); border: 1px solid var(--line); }
+.fv-pdf iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+.fv-actions a.btn { text-decoration: none; }
 .fv-actions { display: flex; gap: 6px; flex: none; padding-top: 4px; }
 .fv-actions .btn { flex: 1; height: 42px; gap: 6px; font-size: 13px; }
 .fv-actions .btn .i { width: 16px; height: 16px; }

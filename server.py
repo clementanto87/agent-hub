@@ -413,8 +413,17 @@ async def view_file_content(path: str):
             "html", "css", "toml", "ini", "conf", "env", "log", "sql", "csv",
             "xml", "svg", "jsx", "tsx", "c", "cpp", "h", "rs", "go", "java"
         }
-        
-        is_text = ext in text_exts or stat.st_size < 1024 * 512
+        # Files that are never text, even when small — don't try to decode them.
+        binary_exts = {
+            "pdf", "png", "jpg", "jpeg", "gif", "webp", "ico", "bmp", "tif", "tiff",
+            "mp3", "wav", "ogg", "m4a", "flac", "mp4", "mov", "avi", "mkv", "webm",
+            "zip", "gz", "tar", "rar", "7z", "bz2", "xz",
+            "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+            "woff", "woff2", "ttf", "otf", "eot", "so", "o", "a", "bin", "exe", "dll",
+        }
+
+        is_pdf = ext == "pdf"
+        is_text = ext not in binary_exts and (ext in text_exts or stat.st_size < 1024 * 512)
         content = None
         if is_text:
             try:
@@ -430,6 +439,7 @@ async def view_file_content(path: str):
             "size_fmt": size_fmt,
             "ext": ext,
             "is_text": is_text,
+            "is_pdf": is_pdf,
             "content": content,
             "writable": os.access(target, os.W_OK)
         }
