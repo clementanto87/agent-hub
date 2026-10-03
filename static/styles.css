@@ -511,13 +511,15 @@ button.row:active { background: var(--surface-3); }
 .scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .6); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); z-index: 90; animation: fade .2s; }
 @keyframes fade { from { opacity: 0; } }
 .sheet {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 100; display: flex; flex-direction: column;
-  background: var(--surface-2); border: 1px solid var(--line-strong); border-bottom: 0; border-radius: 26px 26px 0 0;
-  max-height: 86dvh;
-  transition: max-height .28s cubic-bezier(.2, .8, .2, 1), border-radius .28s ease;
+  position: fixed; left: 0; right: 0; bottom: 0; top: 0; z-index: 100; display: flex; flex-direction: column;
+  background: var(--surface-2); border: 1px solid var(--line-strong); border-bottom: 0;
+  border-radius: 26px 26px 0 0;
+  will-change: transform;
+  transform: translateY(100%);
+  transition: transform .32s cubic-bezier(.32, .72, 0, 1);
 }
-.sheet.half { max-height: 52dvh; }
-.sheet.full { max-height: 100dvh; top: 0; border-radius: 0; padding-top: var(--sat); }
+.sheet.half { transform: translateY(48%); }
+.sheet.full { transform: translateY(0); border-radius: 0; padding-top: var(--sat); }
 .sheet-grab {
   width: 44px;
   height: 5px;
@@ -665,7 +667,8 @@ button.item-row:hover .item-title .mono { color: var(--accent); }
   #view-chat.is-home .composer-dock { padding: 12px 28px 4px; }
   #view-chat.is-home .composer { max-width: 760px; width: 100%; }
   .changes-bar { margin: 10px auto 0; max-width: 760px; width: calc(100% - 56px); }
-  .sheet { left: 50%; right: auto; bottom: 50%; width: 460px; max-width: calc(100vw - 32px); transform: translate(-50%, 50%); border-radius: 24px; border-bottom: 1px solid var(--line-strong); padding-bottom: 0; animation: sheetDesk .25s var(--ease); }
+  .sheet { left: 50%; right: auto; top: auto; bottom: 50%; width: 460px; max-width: calc(100vw - 32px); max-height: 86dvh; border-radius: 24px; border-bottom: 1px solid var(--line-strong); padding-bottom: 0; transition: none; }
+  .sheet.half, .sheet.full { transform: translate(-50%, 50%); animation: sheetDesk .25s var(--ease); }
   @keyframes sheetDesk { from { opacity: 0; transform: translate(-50%, calc(50% + 14px)) scale(.98); } }
   .sheet-grab { display: none; }
   .sheet-body { padding-top: 20px; }

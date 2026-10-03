@@ -279,25 +279,28 @@ let sheetResolve = null;
 function openSheet(html, onMount) {
   closeSheet();
   const s = $('#sheet');
-  if (s) { s.style.transform = ''; s.style.transition = ''; s.classList.remove('half', 'full'); }
+  s.classList.remove('half', 'full');
+  s.style.transform = '';
+  s.style.transition = '';
   const sc = $('#scrim');
   if (sc) { sc.style.opacity = ''; sc.style.transition = ''; }
   $('#sheetBody').innerHTML = html;
-  $('#scrim').hidden = false;
+  sc.hidden = false;
   s.hidden = false;
-  // Start in half-height on phones; CSS handles the max-height
-  if (window.innerWidth < 900) s.classList.add('half');
+  // Force a layout read so the browser sees the starting transform, then animate in
+  void s.offsetHeight;
+  const mobile = window.innerWidth < 900;
+  s.classList.add(mobile ? 'half' : 'full');
   if (onMount) onMount($('#sheetBody'));
   const first = $('#sheetBody [autofocus], #sheetBody .opt.selected, #sheetBody button');
   if (first) first.focus({ preventScroll: true });
 }
 
 function closeSheet(result = null) {
-  $('#scrim').hidden = true;
   const s = $('#sheet');
-  if (s) { s.hidden = true; s.style.transform = ''; s.style.transition = ''; s.classList.remove('half', 'full'); }
   const sc = $('#scrim');
-  if (sc) { sc.style.opacity = ''; sc.style.transition = ''; }
+  if (s) { s.hidden = true; s.style.transform = ''; s.style.transition = ''; s.classList.remove('half', 'full'); }
+  if (sc) { sc.hidden = true; sc.style.opacity = ''; sc.style.transition = ''; }
   if (sheetResolve) { const r = sheetResolve; sheetResolve = null; r(result); }
 }
 
@@ -322,119 +325,105 @@ document.addEventListener('keydown', (e) => {
   else if (vc.open) voiceClose();
 });
 
-// ── Sheet pull-to-dismiss touch gesture ────────────────────────
-(function initSheetPullToDismiss() {
+// ── Sheet gesture: half ↔ full ↔ dismiss ─────────────────────
+// Everything uses translateY for GPU-composited, 60 fps animation.
+// Half state = translateY(48%), full = translateY(0), dismiss = translateY(100%).
+// During a drag, the finger position drives the transform directly.
+(function initSheetGesture() {
   const sheet = $('#sheet');
   const scrim = $('#scrim');
   const body = $('#sheetBody');
   if (!sheet || !body) return;
 
-  let startY = 0;
-  let isDragging = false;
-  let startTime = 0;
-  let dragDir = 0; // -1 up, 1 down
+  const SPRING = 'transform .32s cubic-bezier(.32, .72, 0, 1)';
+  const vh = () => window.innerHeight;
+
+  // The Y offset (in px) for the current snap point
+  function snapPx() {
+    if (sheet.classList.contains('full')) return 0;
+    if (sheet.classList.contains('half')) return vh() * 0.48;
+    return vh(); // hidden
+  }
+
+  let startY = 0, lastY = 0, dragging = false, startTime = 0, baseOffset = 0;
 
   sheet.addEventListener('touchstart', (e) => {
     if (sheet.hidden || e.touches.length !== 1 || window.innerWidth >= 900) return;
-    const touch = e.touches[0];
     const isGrab = !!e.target.closest('.sheet-grab');
     const atTop = body.scrollTop <= 0;
-
-    if (isGrab || atTop) {
-      startY = touch.clientY;
-      startTime = Date.now();
-      isDragging = isGrab;
-      dragDir = 0;
-    } else {
-      startY = 0;
-      isDragging = false;
-    }
+    if (!isGrab && !atTop) { startY = 0; return; }
+    startY = lastY = e.touches[0].clientY;
+    startTime = Date.now();
+    baseOffset = snapPx();
+    dragging = isGrab; // grab handle always starts drag; scroll-top starts on move
   }, { passive: true });
 
   sheet.addEventListener('touchmove', (e) => {
     if (!startY || e.touches.length !== 1 || window.innerWidth >= 900) return;
-    const touch = e.touches[0];
-    const deltaY = touch.clientY - startY;
-    const isHalf = sheet.classList.contains('half');
+    const y = e.touches[0].clientY;
+    const delta = y - startY;
+    lastY = y;
 
-    // Swiping up (negative delta)
-    if (deltaY < -6 && isHalf) {
-      if (!isDragging) isDragging = true;
-      dragDir = -1;
-      if (isDragging && e.cancelable) e.preventDefault();
-      return;
-    }
+    // Start dragging if pulling down from scroll top
+    if (!dragging && body.scrollTop <= 0 && delta > 6) dragging = true;
+    // Start dragging on grab handle when pulling up
+    if (!dragging && e.target.closest('.sheet-grab') && delta < -6) dragging = true;
 
-    // Swiping down (positive delta)
-    if (deltaY > 6) {
-      if (!isDragging && body.scrollTop <= 0) isDragging = true;
-      dragDir = 1;
-      if (isDragging) {
-        if (e.cancelable) e.preventDefault();
-        sheet.style.transition = 'none';
-        sheet.style.transform = `translateY(${deltaY}px)`;
-        if (scrim) scrim.style.opacity = `${Math.max(0.1, 1 - deltaY / 350)}`;
-      }
-    } else if (deltaY <= 0 && isDragging && dragDir === 1) {
-      sheet.style.transition = 'none';
-      sheet.style.transform = 'translateY(0)';
-      if (scrim) scrim.style.opacity = '';
+    if (!dragging) return;
+    if (e.cancelable) e.preventDefault();
+
+    // Compute new offset: base + delta, clamped so it can't go above 0 (full)
+    let offset = baseOffset + delta;
+    // Rubber-band past full (negative offset = above full)
+    if (offset < 0) offset = offset * 0.2;
+
+    sheet.style.transition = 'none';
+    sheet.style.transform = `translateY(${offset}px)`;
+    if (scrim) {
+      const progress = Math.max(0, Math.min(1, 1 - offset / vh()));
+      scrim.style.transition = 'none';
+      scrim.style.opacity = `${progress * 0.6}`;
     }
   }, { passive: false });
 
-  const endDrag = (e) => {
-    if (!startY || window.innerWidth >= 900) return;
-    const touch = e.changedTouches ? e.changedTouches[0] : null;
-    const deltaY = touch ? touch.clientY - startY : 0;
+  function endDrag(e) {
+    if (!startY || !dragging || window.innerWidth >= 900) { startY = 0; dragging = false; return; }
+    const touch = e.changedTouches?.[0];
+    const y = touch ? touch.clientY : lastY;
+    const delta = y - startY;
     const elapsed = Date.now() - startTime;
-    const velocity = elapsed > 0 ? Math.abs(deltaY) / elapsed : 0;
-    const isHalf = sheet.classList.contains('half');
+    const velocity = elapsed > 0 ? delta / elapsed : 0; // px/ms, negative = up
+    const offset = baseOffset + delta;
 
-    startY = 0;
-    if (!isDragging) return;
-    isDragging = false;
+    startY = 0; dragging = false;
 
-    const ease = 'transform .28s cubic-bezier(.2, .8, .2, 1)';
-    sheet.style.transition = ease;
-    if (scrim) scrim.style.transition = 'opacity .28s ease';
+    // Decide which snap point to land on
+    const halfPx = vh() * 0.48;
+    const thresholds = { full: halfPx * 0.35, dismiss: halfPx + (vh() - halfPx) * 0.4 };
 
-    // Swipe UP on half sheet → go full
-    if (dragDir === -1 && isHalf && (deltaY < -40 || velocity > 0.3)) {
-      sheet.classList.remove('half');
-      sheet.classList.add('full');
+    let target;
+    if (velocity < -0.4) target = 'full';         // fast swipe up
+    else if (velocity > 0.5) target = 'dismiss';   // fast swipe down
+    else if (offset < thresholds.full) target = 'full';
+    else if (offset > thresholds.dismiss) target = 'dismiss';
+    else target = 'half';
+
+    sheet.classList.remove('half', 'full');
+
+    if (target === 'dismiss') {
+      sheet.style.transition = SPRING;
+      sheet.style.transform = `translateY(${vh()}px)`;
+      if (scrim) { scrim.style.transition = 'opacity .28s ease'; scrim.style.opacity = '0'; }
+      setTimeout(() => closeSheet(false), 320);
+    } else {
+      sheet.classList.add(target);
+      sheet.style.transition = SPRING;
       sheet.style.transform = '';
-      if (scrim) scrim.style.opacity = '';
-      setTimeout(() => { sheet.style.transition = ''; if (scrim) scrim.style.transition = ''; }, 300);
-      return;
+      if (scrim) { scrim.style.transition = 'opacity .28s ease'; scrim.style.opacity = ''; }
+      if (target === 'half') body.scrollTop = 0;
+      setTimeout(() => { sheet.style.transition = ''; if (scrim) { scrim.style.transition = ''; scrim.style.opacity = ''; } }, 340);
     }
-
-    // Swipe DOWN
-    if (dragDir === 1) {
-      const isFull = sheet.classList.contains('full');
-      // From full → snap to half
-      if (isFull && deltaY > 60 && deltaY < 250) {
-        sheet.classList.remove('full');
-        sheet.classList.add('half');
-        sheet.style.transform = '';
-        if (scrim) scrim.style.opacity = '';
-        body.scrollTop = 0;
-        setTimeout(() => { sheet.style.transition = ''; if (scrim) scrim.style.transition = ''; }, 300);
-        return;
-      }
-      // Dismiss
-      if (deltaY > 90 || (velocity > 0.4 && deltaY > 25)) {
-        sheet.style.transform = 'translateY(100%)';
-        if (scrim) scrim.style.opacity = '0';
-        setTimeout(() => closeSheet(false), 220);
-        return;
-      }
-    }
-
-    // Snap back
-    sheet.style.transform = 'translateY(0)';
-    if (scrim) scrim.style.opacity = '';
-    setTimeout(() => { sheet.style.transform = ''; sheet.style.transition = ''; if (scrim) scrim.style.transition = ''; }, 300);
-  };
+  }
 
   sheet.addEventListener('touchend', endDrag, { passive: true });
   sheet.addEventListener('touchcancel', endDrag, { passive: true });
