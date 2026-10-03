@@ -1452,7 +1452,12 @@ function switchTab(tab) {
   if (tab === 'terminal') setTimeout(openTerminal, 60);
   if (tab === 'history') { loadSessions(); renderHistory(); if (!$('#historySearch').value) setTimeout(() => $('#historySearch')?.focus({ preventScroll: true }), 80); }
   if (tab === 'settings') { refreshSettings(); checkTunnel(); }
-  if (tab === 'chat') { state.stick && scrollToBottom(); }
+  if (tab === 'chat') {
+    // Thread: stick to the latest message. Home: start at the top so the
+    // most recent folder (and anything running) is what you land on.
+    if (chromeMode() === 'thread') { state.stick && scrollToBottom(); }
+    else threadEl().scrollTop = 0;
+  }
   syncMonitorPolling();
 }
 
