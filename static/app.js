@@ -373,9 +373,7 @@ function promptSheet({ title, message, value = '', placeholder = '', confirm = '
 $('#scrim').addEventListener('click', () => closeSheet(false));
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  if ($('#rail')?.classList.contains('open')) closeNav();
-  else if (!$('#sheet').hidden) closeSheet(false);
-  else if (vc.open) voiceClose();
+  goBack();
 });
 
 // ── Sheet gesture: half ↔ full ↔ dismiss ─────────────────────
@@ -518,6 +516,62 @@ document.addEventListener('keydown', (e) => {
 
   sheet.addEventListener('touchend', endDrag, { passive: true });
   sheet.addEventListener('touchcancel', endDrag, { passive: true });
+})();
+
+// ── Back navigation (shared by Escape key and left-edge swipe) ──
+// Unwinds the UI one layer at a time, like a system Back button.
+function goBack() {
+  if ($('#rail')?.classList.contains('open')) { closeNav(); return true; }
+
+  const sheet = $('#sheet');
+  if (sheet && !sheet.hidden) {
+    const body = $('#sheetBody');
+    // File viewer / editor: use its own in-sheet back control first.
+    const inSheetBack = body?.querySelector('.fv-head [data-browse-to], .fv-head [data-view-file]');
+    if (inSheetBack) { inSheetBack.click(); return true; }
+    // Explorer: step up one folder if there's a parent.
+    const upRow = body?.querySelector('.browse-list .browse-row[data-browse-to]');
+    if (upRow) { upRow.click(); return true; }
+    closeSheet(false); return true;
+  }
+
+  if (typeof vc !== 'undefined' && vc.open) { voiceClose(); return true; }
+  if (chromeMode() === 'thread') { newChat({ focus: false }); return true; }
+  if (state.tab !== 'chat') { switchTab('chat'); return true; }
+  return false;
+}
+
+// ── Left-edge swipe → Back (phones only) ──────────────────────
+(function initEdgeSwipeBack() {
+  const EDGE = 24;          // px from the left edge that arms the gesture
+  const TRIGGER = 70;       // px of rightward travel to commit
+  let armed = false, sx = 0, sy = 0, decided = false;
+
+  document.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1 || window.innerWidth >= 900) { armed = false; return; }
+    const t = e.touches[0];
+    armed = t.clientX <= EDGE;
+    sx = t.clientX; sy = t.clientY; decided = false;
+  }, { passive: true });
+
+  document.addEventListener('touchmove', (e) => {
+    if (!armed || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const dx = t.clientX - sx;
+    const dy = t.clientY - sy;
+    if (!decided) {
+      // Commit to back only when the motion is clearly horizontal.
+      if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 12) { armed = false; return; }
+      if (dx > TRIGGER && Math.abs(dx) > Math.abs(dy)) {
+        decided = true;
+        armed = false;
+        goBack();
+      }
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchend', () => { armed = false; }, { passive: true });
+  document.addEventListener('touchcancel', () => { armed = false; }, { passive: true });
 })();
 
 const MODEL_AGENTS = ['antigravity', 'claude', 'codex'];
