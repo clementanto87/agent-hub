@@ -303,8 +303,9 @@ function openSheet(html, onMount) {
   // so going to another folder while expanded doesn't collapse to half.
   const target = mobile ? (wasFull ? 'full' : 'half') : 'full';
 
+  const b = $('#sheetBody');
   if (wasOpen) {
-    // Content swap: stay in place, no slide-in animation.
+    // Content swap: keep the frame in place, fade the new content in softly.
     s.style.transition = 'none';
     if (sc) sc.style.transition = 'none';
     s.classList.remove('half', 'full');
@@ -313,8 +314,21 @@ function openSheet(html, onMount) {
     if (sc) sc.style.opacity = '';
     void s.offsetHeight;
     requestAnimationFrame(() => { s.style.transition = ''; if (sc) sc.style.transition = ''; });
+
+    b.style.transition = 'none';
+    b.style.transform = 'translateY(8px)';
+    b.style.opacity = '0';
+    void b.offsetWidth;
+    requestAnimationFrame(() => {
+      b.style.transition = 'transform .22s cubic-bezier(.32,.72,0,1), opacity .2s ease';
+      b.style.transform = 'translateY(0)';
+      b.style.opacity = '1';
+    });
   } else {
     // Fresh open: slide up from hidden.
+    b.style.transition = 'none';
+    b.style.transform = '';
+    b.style.opacity = '';
     s.classList.remove('half', 'full');
     s.style.transform = '';
     s.style.transition = '';
@@ -331,6 +345,8 @@ function openSheet(html, onMount) {
 function closeSheet(result = null) {
   const s = $('#sheet');
   const sc = $('#scrim');
+  const b = $('#sheetBody');
+  if (b) { b.style.transition = ''; b.style.transform = ''; b.style.opacity = ''; }
   if (s) { s.hidden = true; s.style.transform = ''; s.style.transition = ''; s.classList.remove('half', 'full'); }
   if (sc) { sc.hidden = true; sc.style.opacity = ''; sc.style.transition = ''; }
   if (sheetResolve) { const r = sheetResolve; sheetResolve = null; r(result); }
@@ -519,59 +535,106 @@ document.addEventListener('keydown', (e) => {
 })();
 
 // ── Back navigation (shared by Escape key and left-edge swipe) ──
+// The sheet portion: step back one layer inside an open sheet.
+// Returns 'nav' when it swapped content, 'close' when it dismissed,
+// or null when there was no sheet to act on.
+function performSheetBack() {
+  const sheet = $('#sheet');
+  if (!sheet || sheet.hidden) return null;
+  const body = $('#sheetBody');
+  const inSheetBack = body?.querySelector('.fv-head [data-browse-to], .fv-head [data-view-file]');
+  if (inSheetBack) { inSheetBack.click(); return 'nav'; }
+  const upRow = body?.querySelector('.browse-list .browse-row[data-browse-to]');
+  if (upRow) { upRow.click(); return 'nav'; }
+  closeSheet(false);
+  return 'close';
+}
+
 // Unwinds the UI one layer at a time, like a system Back button.
 function goBack() {
   if ($('#rail')?.classList.contains('open')) { closeNav(); return true; }
-
-  const sheet = $('#sheet');
-  if (sheet && !sheet.hidden) {
-    const body = $('#sheetBody');
-    // File viewer / editor: use its own in-sheet back control first.
-    const inSheetBack = body?.querySelector('.fv-head [data-browse-to], .fv-head [data-view-file]');
-    if (inSheetBack) { inSheetBack.click(); return true; }
-    // Explorer: step up one folder if there's a parent.
-    const upRow = body?.querySelector('.browse-list .browse-row[data-browse-to]');
-    if (upRow) { upRow.click(); return true; }
-    closeSheet(false); return true;
-  }
-
+  if (performSheetBack()) return true;
   if (typeof vc !== 'undefined' && vc.open) { voiceClose(); return true; }
   if (chromeMode() === 'thread') { newChat({ focus: false }); return true; }
   if (state.tab !== 'chat') { switchTab('chat'); return true; }
   return false;
 }
 
-// ── Left-edge swipe → Back (phones only) ──────────────────────
+// ── Left-edge swipe → Back, finger-tracking (phones only) ─────
+// While a sheet is open the content follows the finger and either
+// completes (slides off, content swaps) or springs back. With no
+// sheet open it falls back to a committed Back on release.
 (function initEdgeSwipeBack() {
-  const EDGE = 24;          // px from the left edge that arms the gesture
-  const TRIGGER = 70;       // px of rightward travel to commit
-  let armed = false, sx = 0, sy = 0, decided = false;
+  const EDGE = 28;          // px from the left edge that arms the gesture
+  const COMMIT = 0.32;      // fraction of width (or a flick) to complete
+  const SPRING = 'transform .26s cubic-bezier(.32,.72,0,1), opacity .2s ease';
+  let armed = false, decided = false, onSheet = false;
+  let sx = 0, sy = 0, w = 1, startT = 0, lastX = 0;
+
+  const body = () => $('#sheetBody');
 
   document.addEventListener('touchstart', (e) => {
     if (e.touches.length !== 1 || window.innerWidth >= 900) { armed = false; return; }
     const t = e.touches[0];
-    armed = t.clientX <= EDGE;
-    sx = t.clientX; sy = t.clientY; decided = false;
+    if (t.clientX > EDGE) { armed = false; return; }
+    armed = true; decided = false;
+    sx = lastX = t.clientX; sy = t.clientY; w = window.innerWidth; startT = Date.now();
+    onSheet = !$('#sheet').hidden;
   }, { passive: true });
 
   document.addEventListener('touchmove', (e) => {
     if (!armed || e.touches.length !== 1) return;
     const t = e.touches[0];
-    const dx = t.clientX - sx;
-    const dy = t.clientY - sy;
+    const dx = t.clientX - sx, dy = t.clientY - sy;
+    lastX = t.clientX;
     if (!decided) {
-      // Commit to back only when the motion is clearly horizontal.
-      if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 12) { armed = false; return; }
-      if (dx > TRIGGER && Math.abs(dx) > Math.abs(dy)) {
-        decided = true;
-        armed = false;
-        goBack();
-      }
+      if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) { armed = false; return; }
+      if (dx > 8 && Math.abs(dx) > Math.abs(dy)) decided = true;
+      else return;
     }
-  }, { passive: true });
+    if (!onSheet) return; // view-level back resolves on release
+    if (e.cancelable) e.preventDefault();
+    const b = body();
+    if (!b) return;
+    const x = Math.max(0, dx);
+    b.style.transition = 'none';
+    b.style.transform = `translateX(${x}px)`;
+    b.style.opacity = `${1 - Math.min(1, x / w) * 0.35}`;
+  }, { passive: false });
 
-  document.addEventListener('touchend', () => { armed = false; }, { passive: true });
-  document.addEventListener('touchcancel', () => { armed = false; }, { passive: true });
+  function finish(e) {
+    if (!armed || !decided) { armed = false; return; }
+    armed = false;
+    const t = e.changedTouches?.[0];
+    const x = Math.max(0, (t ? t.clientX : lastX) - sx);
+    const dt = Date.now() - startT;
+    const vx = dt > 0 ? x / dt : 0;
+    const commit = x > w * COMMIT || vx > 0.5;
+
+    if (!onSheet) { if (commit) goBack(); return; }
+
+    const b = body();
+    if (!b) return;
+    if (commit) {
+      b.style.transition = 'transform .2s ease, opacity .2s ease';
+      b.style.transform = `translateX(${w}px)`;
+      b.style.opacity = '0';
+      setTimeout(() => {
+        b.style.transition = 'none';
+        b.style.transform = '';
+        b.style.opacity = '';
+        performSheetBack(); // new content fades in via openSheet
+      }, 190);
+    } else {
+      b.style.transition = SPRING;
+      b.style.transform = '';
+      b.style.opacity = '';
+      setTimeout(() => { b.style.transition = ''; }, 280);
+    }
+  }
+
+  document.addEventListener('touchend', finish, { passive: true });
+  document.addEventListener('touchcancel', finish, { passive: true });
 })();
 
 const MODEL_AGENTS = ['antigravity', 'claude', 'codex'];
