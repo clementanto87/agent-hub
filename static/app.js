@@ -3836,6 +3836,7 @@ document.addEventListener('click', async (e) => {
   }
 
   if ((el = q('[data-action]'))) { actions[el.dataset.action]?.(el); return; }
+  if (q('[data-files-tab]')) { browseMode = 'files'; openWorkspaceSheet(state.workspace || '/root'); return; }
   if ((el = q('[data-tab]'))) { switchTab(el.dataset.tab); return; }
   if ((el = q('[data-suggest]'))) { const s = SUGGESTIONS[el.dataset.suggest]; send(state.agent === 'bash' ? s.cmd : s.prompt); return; }
   if ((el = q('[data-browse-to]'))) { openWorkspaceSheet(el.dataset.browseTo); return; }
