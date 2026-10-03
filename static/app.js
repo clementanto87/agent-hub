@@ -286,20 +286,43 @@ async function api(path, opts) {
 let sheetResolve = null;
 
 function openSheet(html, onMount) {
-  closeSheet();
   const s = $('#sheet');
-  s.classList.remove('half', 'full');
-  s.style.transform = '';
-  s.style.transition = '';
   const sc = $('#scrim');
-  if (sc) { sc.style.opacity = ''; sc.style.transition = ''; }
+  const wasOpen = !s.hidden;
+  const wasFull = wasOpen && s.classList.contains('full');
+
+  // Replacing one sheet with another cancels the first's pending result.
+  if (sheetResolve) { const r = sheetResolve; sheetResolve = null; r(null); }
+
   $('#sheetBody').innerHTML = html;
   sc.hidden = false;
   s.hidden = false;
-  // Force a layout read so the browser sees the starting transform, then animate in
-  void s.offsetHeight;
+
   const mobile = window.innerWidth < 900;
-  s.classList.add(mobile ? 'half' : 'full');
+  // Keep the current height when navigating inside an already-open sheet,
+  // so going to another folder while expanded doesn't collapse to half.
+  const target = mobile ? (wasFull ? 'full' : 'half') : 'full';
+
+  if (wasOpen) {
+    // Content swap: stay in place, no slide-in animation.
+    s.style.transition = 'none';
+    if (sc) sc.style.transition = 'none';
+    s.classList.remove('half', 'full');
+    s.classList.add(target);
+    s.style.transform = '';
+    if (sc) sc.style.opacity = '';
+    void s.offsetHeight;
+    requestAnimationFrame(() => { s.style.transition = ''; if (sc) sc.style.transition = ''; });
+  } else {
+    // Fresh open: slide up from hidden.
+    s.classList.remove('half', 'full');
+    s.style.transform = '';
+    s.style.transition = '';
+    if (sc) { sc.style.opacity = ''; sc.style.transition = ''; }
+    void s.offsetHeight;
+    s.classList.add(target);
+  }
+
   if (onMount) onMount($('#sheetBody'));
   const first = $('#sheetBody [autofocus], #sheetBody .opt.selected, #sheetBody button');
   if (first) first.focus({ preventScroll: true });
