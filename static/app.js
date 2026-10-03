@@ -68,6 +68,7 @@ const state = {
     fiveHourBudget: store.get('pref.fiveHourBudget', 200000),
     weeklyBudget: store.get('pref.weeklyBudget', 1500000),
   },
+  online: typeof navigator !== 'undefined' ? (navigator.onLine !== false) : true,
 };
 if (!AGENTS[state.agent]) state.agent = 'antigravity';
 
@@ -265,9 +266,17 @@ async function notifyTaskComplete({ agent = 'Agent', content = '', sessionId = n
 }
 
 async function api(path, opts) {
-  const res = await fetch(path, opts);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
+  try {
+    const res = await fetch(path, opts);
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (state.online !== true) setConn(true);
+    return await res.json();
+  } catch (err) {
+    if (path !== '/api/events' && typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setConn(false);
+    }
+    throw err;
+  }
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -1119,6 +1128,7 @@ function updateTitle() {
   setPlaceholder();
   syncGitBar();
   renderInspector();
+  updateHomeStatus();
 }
 
 function setPlaceholder() {
@@ -3015,17 +3025,24 @@ async function toggleTunnel() {
 }
 
 function setConn(ok) {
-  state.online = ok;
-  $('#connDot').className = `conn-dot ${ok ? 'ok' : 'bad'}`;
-  $('#connText').textContent = ok ? 'Connected to VM' : 'Offline';
+  state.online = !!ok;
+  const dot = $('#connDot');
+  if (dot) dot.className = `conn-dot ${state.online ? 'ok' : 'bad'}`;
+  const txt = $('#connText');
+  if (txt) txt.textContent = state.online ? 'Connected to VM' : 'Offline';
   updateHomeStatus();
 }
 
 function updateHomeStatus() {
-  const n = state.running.size;
-  $('#homeConnDot').className = `conn-dot ${state.online === false ? 'bad' : state.online ? 'ok' : ''}`;
-  $('#homeConnText').textContent = state.online === false ? 'VM offline'
-    : `Connected${n ? ` · ${n} task${n === 1 ? '' : 's'} running` : ''}`;
+  const n = state.running ? state.running.size : 0;
+  const isOnline = state.online !== false;
+  const dot = $('#homeConnDot');
+  if (dot) dot.className = `conn-dot ${isOnline ? 'ok' : 'bad'}`;
+  const txt = $('#homeConnText');
+  if (txt) {
+    txt.textContent = !isOnline ? 'VM offline'
+      : `Connected${n ? ` · ${n} task${n === 1 ? '' : 's'} running` : ''}`;
+  }
 }
 
 /* ════════════════════════════════════════════════════════════
