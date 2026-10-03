@@ -3072,6 +3072,206 @@ function openMcpAiGenerator() {
         e.target.disabled = false;
         e.target.textContent = 'Generate Config';
       }
+async function openVaultSheet() {
+  openSheet(`
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <h3 style="margin:0;">Encrypted Credentials Vault</h3>
+      <button class="btn btn-primary btn-sm" id="vaultBtnNew" style="display:inline-flex; align-items:center; gap:4px;">${icon('i-plus', 'xs')} New Login</button>
+    </div>
+    <p class="lead">All credentials, passwords, and 2FA secrets are AES-256-GCM encrypted and available to all agents.</p>
+    <div id="vaultListContainer" style="margin-top:12px; display:flex; flex-direction:column; gap:8px;">
+      <div style="text-align:center; padding:16px; color:var(--text-2);">Loading credentials…</div>
+    </div>
+  `, async (body) => {
+    $('#vaultBtnNew', body)?.addEventListener('click', () => {
+      openVaultCreator();
+    });
+
+    try {
+      const res = await api('/api/vault');
+      const list = res.credentials || [];
+      const cont = $('#vaultListContainer', body);
+      if (!cont) return;
+      if (!list.length) {
+        cont.innerHTML = `
+          <div style="text-align:center; padding:24px 12px; background:var(--surface-1); border-radius:12px; border:1px dashed var(--line);">
+            <div style="font-size:24px; margin-bottom:6px;">🔐</div>
+            <div style="font-weight:600; font-size:14px;">Vault is empty</div>
+            <div style="font-size:12px; color:var(--text-2); margin-top:4px;">Add your first site login or API credential to share with agents.</div>
+          </div>
+        `;
+        return;
+      }
+
+      cont.innerHTML = list.map(c => `
+        <div class="card" style="padding:12px 14px; display:flex; flex-direction:column; gap:6px; background:var(--surface-1); border:1px solid var(--line); border-radius:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline;">
+            <div style="font-weight:650; font-size:14px; color:var(--text);">${esc(c.name || c.service)} <span class="mono" style="font-size:11px; color:var(--text-2); font-weight:normal;">(${esc(c.service)})</span></div>
+            <div style="display:flex; gap:6px;">
+              ${c.has_totp ? `<button class="btn btn-sm btn-ghost" data-vault-totp="${esc(c.service)}" style="font-size:12px; padding:2px 8px; color:#7c8cff;">🔑 2FA</button>` : ''}
+              ${c.url ? `<button class="btn btn-sm btn-ghost" data-vault-login="${esc(c.service)}" style="font-size:12px; padding:2px 8px; color:#34d399;">🌐 Auto Login</button>` : ''}
+              <button class="btn btn-sm btn-ghost" data-vault-del="${esc(c.service)}" style="font-size:12px; padding:2px 6px; color:#f87171;">🗑️</button>
+            </div>
+          </div>
+          <div style="font-size:12.5px; color:var(--text-2); display:flex; gap:12px; flex-wrap:wrap;">
+            ${c.username ? `<span>👤 ${esc(c.username)}</span>` : ''}
+            ${c.url ? `<span class="mono" style="overflow:hidden; text-overflow:ellipsis; max-width:240px;">🔗 ${esc(c.url)}</span>` : ''}
+            ${c.has_password ? `<span>🔒 Password stored</span>` : ''}
+            ${c.has_token ? `<span>🎟️ API Token</span>` : ''}
+          </div>
+          <div id="vaultResult_${esc(c.service)}" style="display:none; margin-top:6px; font-size:12px; padding:6px 10px; border-radius:6px; background:var(--surface-2);"></div>
+        </div>
+      `).join('');
+
+      // Wire TOTP buttons
+      $$('[data-vault-totp]', body).forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const s = btn.dataset.vaultTotp;
+          const box = $(`#vaultResult_${s}`, body);
+          btn.disabled = true;
+          try {
+            const totp = await api(`/api/vault/${encodeURIComponent(s)}/totp`);
+            if (box) {
+              box.style.display = 'block';
+              box.innerHTML = `🔑 <strong>2FA Code:</strong> <span class="mono" style="font-size:16px; font-weight:700; color:#7c8cff; letter-spacing:2px; margin-left:6px;">${totp.code}</span> <span style="color:var(--text-2); margin-left:8px;">(${totp.remaining_seconds}s remaining)</span>`;
+            }
+          } catch (e) {
+            toast('TOTP error: ' + e.message, 'err');
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      });
+
+      // Wire Auto Login buttons
+      $$('[data-vault-login]', body).forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const s = btn.dataset.vaultLogin;
+          const box = $(`#vaultResult_${s}`, body);
+          btn.disabled = true;
+          btn.textContent = 'Logging in…';
+          if (box) {
+            box.style.display = 'block';
+            box.innerHTML = `⏳ Executing headless Playwright browser login for <code>${esc(s)}</code>…`;
+          }
+          try {
+            const res = await api(`/api/vault/${encodeURIComponent(s)}/login`, { method: 'POST' });
+            if (res.success) {
+              toast(`Logged into ${s}!`, 'ok');
+              if (box) {
+                box.innerHTML = `✅ <strong>Login Success!</strong> Saved session cookies to <code>${esc(res.session_saved)}</code>. Page: <em>${esc(res.title || res.final_url)}</em>`;
+              }
+            } else {
+              toast(`Login failed: ${res.error}`, 'err');
+              if (box) {
+                box.innerHTML = `❌ <strong>Login Failed:</strong> ${esc(res.error)}`;
+              }
+            }
+          } catch (e) {
+            toast('Login error: ' + e.message, 'err');
+          } finally {
+            btn.disabled = false;
+            btn.textContent = '🌐 Auto Login';
+          }
+        });
+      });
+
+      // Wire Delete buttons
+      $$('[data-vault-del]', body).forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const s = btn.dataset.vaultDel;
+          if (!confirm(`Delete credential for "${s}"?`)) return;
+          try {
+            await api(`/api/vault/${encodeURIComponent(s)}`, { method: 'DELETE' });
+            toast(`Deleted "${s}"`, 'ok');
+            openVaultSheet();
+          } catch (e) {
+            toast('Delete failed: ' + e.message, 'err');
+          }
+        });
+      });
+
+    } catch (e) {
+      toast('Failed to load vault: ' + e.message, 'err');
+    }
+  });
+}
+
+function openVaultCreator({ service = '', name = '', username = '', password = '', totp_secret = '', url = '', api_token = '', notes = '' } = {}) {
+  openSheet(`
+    <h3>${service ? 'Edit Credential' : 'Add Credential to Vault'}</h3>
+    <p class="lead">Encrypted with AES-256-GCM. Available to Antigravity, Claude, and Codex.</p>
+    <div class="stack" style="gap:10px; margin-top:10px;">
+      <label>
+        <span class="sheet-meta">Service ID (e.g. github, tentamus-ciam, azure)</span>
+        <input class="composer-input" id="vaultInputService" style="border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:4px;" value="${esc(service)}" placeholder="e.g. github" ${service ? 'readonly' : ''}>
+      </label>
+      <label>
+        <span class="sheet-meta">Friendly Name</span>
+        <input class="composer-input" id="vaultInputName" style="border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:4px;" value="${esc(name)}" placeholder="e.g. GitHub Production">
+      </label>
+      <label>
+        <span class="sheet-meta">Login or Web Portal URL</span>
+        <input class="composer-input" id="vaultInputUrl" type="url" style="border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:4px;" value="${esc(url)}" placeholder="https://github.com/login">
+      </label>
+      <label>
+        <span class="sheet-meta">Username or Email</span>
+        <input class="composer-input" id="vaultInputUser" style="border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:4px;" value="${esc(username)}" placeholder="user@example.com">
+      </label>
+      <label>
+        <span class="sheet-meta">Password</span>
+        <input class="composer-input" id="vaultInputPass" type="password" style="border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:4px;" value="${esc(password)}" placeholder="Enter password (AES-256 encrypted)">
+      </label>
+      <label>
+        <span class="sheet-meta">2FA / TOTP Base32 Secret (Optional)</span>
+        <input class="composer-input mono" id="vaultInputTotp" style="border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:4px;" value="${esc(totp_secret)}" placeholder="e.g. JBSWY3DPEHPK3PXP">
+      </label>
+      <label>
+        <span class="sheet-meta">API Token / Secret Key (Optional)</span>
+        <input class="composer-input mono" id="vaultInputToken" type="password" style="border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:4px;" value="${esc(api_token)}" placeholder="e.g. ghp_xxxxxxxx">
+      </label>
+      <label>
+        <span class="sheet-meta">Notes / Metadata (Optional)</span>
+        <textarea class="composer-input" id="vaultInputNotes" rows="2" style="border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:4px;" placeholder="Notes, recovery codes, or tenant details">${esc(notes)}</textarea>
+      </label>
+    </div>
+    <div class="sheet-actions" style="margin-top:14px;">
+      <button class="btn" data-sheet="cancel">Cancel</button>
+      <button class="btn btn-primary" id="saveVaultBtn">Save to Vault</button>
+    </div>
+  `, (body) => {
+    $('#saveVaultBtn', body)?.addEventListener('click', async () => {
+      const vService = $('#vaultInputService', body).value.trim();
+      const vName = $('#vaultInputName', body).value.trim();
+      const vUrl = $('#vaultInputUrl', body).value.trim();
+      const vUser = $('#vaultInputUser', body).value.trim();
+      const vPass = $('#vaultInputPass', body).value;
+      const vTotp = $('#vaultInputTotp', body).value.trim();
+      const vToken = $('#vaultInputToken', body).value.trim();
+      const vNotes = $('#vaultInputNotes', body).value.trim();
+
+      if (!vService) { toast('Service ID is required', 'err'); return; }
+
+      try {
+        await api('/api/vault', {
+          method: 'POST',
+          body: JSON.stringify({
+            service: vService,
+            name: vName,
+            url: vUrl,
+            username: vUser,
+            password: vPass,
+            totp_secret: vTotp,
+            api_token: vToken,
+            notes: vNotes
+          })
+        });
+        closeSheet();
+        toast(`Credentials for "${vService}" saved to vault!`, 'ok');
+        openVaultSheet();
+      } catch (e) {
+        toast(`Save failed: ${e.message}`, 'err');
+      }
     });
   });
 }
@@ -3101,6 +3301,7 @@ const actions = {
   'new-chat': () => { closeSheet(); newChat({ focus: true }); },
   'go-home': () => newChat({ focus: false }),
   'open-chat-menu': openChatMenu,
+  'open-vault': openVaultSheet,
   'open-create-menu': () => {
     const mcp = skillsPanelActive === 'mcp';
     openSheet(`

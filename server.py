@@ -653,6 +653,72 @@ async def memory_save_endpoint(request: Request):
     res = await asyncio.to_thread(save_memory, content, metadata)
     return res
 
+from services import vault_service
+
+@app.get("/api/vault")
+async def list_vault_endpoint():
+    creds = await asyncio.to_thread(vault_service.list_credentials)
+    return {"credentials": creds}
+
+@app.post("/api/vault")
+async def set_vault_endpoint(request: Request):
+    data = await request.json()
+    service = (data.get("service") or "").strip()
+    if not service:
+        return JSONResponse({"error": "Service identifier is required"}, status_code=400)
+    try:
+        res = await asyncio.to_thread(
+            vault_service.set_credential,
+            service=service,
+            username=data.get("username", ""),
+            password=data.get("password", ""),
+            totp_secret=data.get("totp_secret", ""),
+            url=data.get("url", ""),
+            api_token=data.get("api_token", ""),
+            name=data.get("name", ""),
+            notes=data.get("notes", "")
+        )
+        return res
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+@app.get("/api/vault/{service}")
+async def get_vault_endpoint(service: str, field: str = None):
+    if field:
+        val = await asyncio.to_thread(vault_service.get_field, service, field)
+        if val is None:
+            return JSONResponse({"error": f"Field '{field}' not found"}, status_code=404)
+        return {"service": service, field: val}
+    cred = await asyncio.to_thread(vault_service.get_credential, service)
+    if not cred:
+        return JSONResponse({"error": "Service not found in vault"}, status_code=404)
+    return cred
+
+@app.delete("/api/vault/{service}")
+async def delete_vault_endpoint(service: str):
+    ok = await asyncio.to_thread(vault_service.delete_credential, service)
+    return {"success": ok}
+
+@app.get("/api/vault/{service}/totp")
+async def get_vault_totp_endpoint(service: str):
+    try:
+        res = await asyncio.to_thread(vault_service.generate_totp, service)
+        return res
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+@app.post("/api/vault/{service}/login")
+async def login_vault_endpoint(service: str, request: Request):
+    data = {}
+    try:
+        data = await request.json()
+    except Exception:
+        pass
+    url = data.get("url")
+    timeout = data.get("timeout", 40)
+    res = await vault_service.login_to_site(service, headless=True, custom_url=url, timeout=timeout)
+    return res
+
 from services import skills_mcp_service
 
 @app.get("/api/skills")

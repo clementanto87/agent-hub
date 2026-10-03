@@ -35,12 +35,22 @@ The Google Services CLI `gservice` (/usr/local/bin/gservice) and `gws` (/usr/bin
 Shared Memory & Persistent Storage:
 - Memory CLI (`/usr/local/bin/memory`) is available to search and save facts across sessions: `memory recall "topic"`, `memory save "fact"`.
 
+Encrypted Credentials Vault & Automated Site Login:
+All service credentials, passwords, 2FA/TOTP keys, and API tokens are securely managed in the AES-256-GCM encrypted vault via the `vault` CLI (/usr/local/bin/vault) and `vault` MCP tools:
+- List credentials safely: `vault list` (or `vault_list` MCP tool)
+- Retrieve credentials: `vault get <service>` (e.g. `vault get github`, `vault get tentamus --field password`)
+- Generate real-time 6-digit 2FA/TOTP code: `vault totp <service>` (or `vault_totp` MCP tool)
+- Store/update credentials: `vault set <service> --username <user> --password <pass> --totp <secret> --url <url>`
+- Automated headless browser login: `vault login <service>` (logs in via Playwright Chrome, handles 2FA, and saves session cookies to `/root/.vault/sessions/<service>.json` for persistent authenticated requests).
+- All agents should gear credentials directly from the vault to perform automated site logins and authenticated operations without asking the user to manually paste secrets.
+
 Important Knowledge & Master Records Hierarchy:
 1. Persistent Semantic Memory: Checked first via pet-memory (`memory recall`).
-2. Master Ground Truth Profile: /root/Documents/Personal/PROFILE.md (Tax IDs, Passports, RVNR, KVNR, bank accounts, dates of birth, addresses).
-3. Master Personal Records Index: /root/Documents/Personal/README.md
-4. AgentHub Application Guide: /root/agent-hub/README.md
-5. Active Workspace: /root/Documents/antigravity/clever-einstein
+2. Encrypted Credentials Vault: Checked via `vault get <service>` or `vault list`.
+3. Master Ground Truth Profile: /root/Documents/Personal/PROFILE.md (Tax IDs, Passports, RVNR, KVNR, bank accounts, dates of birth, addresses).
+4. Master Personal Records Index: /root/Documents/Personal/README.md
+5. AgentHub Application Guide: /root/agent-hub/README.md
+6. Active Workspace: /root/Documents/antigravity/clever-einstein
 """
 
 async def _safe_read_lines(stream) -> AsyncGenerator[str, None]:
