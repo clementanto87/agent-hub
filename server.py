@@ -451,6 +451,107 @@ async def get_raw_file(path: str):
     mime_type, _ = mimetypes.guess_type(target)
     return FileResponse(target, media_type=mime_type or "application/octet-stream", filename=os.path.basename(target), content_disposition_type="inline")
 
+def _clean_path(raw: str) -> str:
+    raw = (raw or "").strip().strip('"').strip("'")
+    if raw.startswith("file://"):
+        raw = raw[7:]
+    return os.path.realpath(os.path.expanduser(raw))
+
+@app.post("/api/file/save")
+async def save_file_content(request: Request):
+    """Write text content to a file (overwrites)."""
+    data = await request.json()
+    target = _clean_path(data.get("path", ""))
+    content = data.get("content", "")
+    if not target:
+        return JSONResponse({"error": "Path is required"}, status_code=400)
+    if os.path.isdir(target):
+        return JSONResponse({"error": "Path is a directory"}, status_code=400)
+    try:
+        def _write():
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "w", encoding="utf-8") as f:
+                f.write(content)
+        await asyncio.to_thread(_write)
+        stat = os.stat(target)
+        return {"ok": True, "path": target, "size": stat.st_size, "size_fmt": format_file_size(stat.st_size)}
+    except PermissionError:
+        return JSONResponse({"error": "Permission denied"}, status_code=403)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/api/file/create")
+async def create_file_or_dir(request: Request):
+    """Create a new empty file or a new directory."""
+    data = await request.json()
+    parent = _clean_path(data.get("parent", ""))
+    name = (data.get("name", "") or "").strip().strip("/")
+    is_dir = bool(data.get("is_dir"))
+    if not parent or not name or "/" in name or name in (".", ".."):
+        return JSONResponse({"error": "Invalid name"}, status_code=400)
+    if not os.path.isdir(parent):
+        return JSONResponse({"error": "Parent directory not found"}, status_code=404)
+    target = os.path.join(parent, name)
+    if os.path.exists(target):
+        return JSONResponse({"error": "Already exists"}, status_code=409)
+    try:
+        def _create():
+            if is_dir:
+                os.makedirs(target, exist_ok=False)
+            else:
+                with open(target, "x", encoding="utf-8"):
+                    pass
+        await asyncio.to_thread(_create)
+        return {"ok": True, "path": target, "is_dir": is_dir}
+    except PermissionError:
+        return JSONResponse({"error": "Permission denied"}, status_code=403)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/api/file/rename")
+async def rename_path(request: Request):
+    """Rename or move a file or directory."""
+    data = await request.json()
+    src = _clean_path(data.get("path", ""))
+    new_name = (data.get("new_name", "") or "").strip().strip("/")
+    if not src or not os.path.exists(src):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    if not new_name or "/" in new_name or new_name in (".", ".."):
+        return JSONResponse({"error": "Invalid name"}, status_code=400)
+    dst = os.path.join(os.path.dirname(src), new_name)
+    if os.path.exists(dst):
+        return JSONResponse({"error": "Target already exists"}, status_code=409)
+    try:
+        await asyncio.to_thread(os.rename, src, dst)
+        return {"ok": True, "path": dst}
+    except PermissionError:
+        return JSONResponse({"error": "Permission denied"}, status_code=403)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/api/file/delete")
+async def delete_path(request: Request):
+    """Delete a file or directory (recursive for directories)."""
+    import shutil
+    data = await request.json()
+    target = _clean_path(data.get("path", ""))
+    if not target or not os.path.exists(target):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    if target in ("/", "/root", os.path.expanduser("~")):
+        return JSONResponse({"error": "Refusing to delete protected path"}, status_code=400)
+    try:
+        def _delete():
+            if os.path.isdir(target) and not os.path.islink(target):
+                shutil.rmtree(target)
+            else:
+                os.remove(target)
+        await asyncio.to_thread(_delete)
+        return {"ok": True}
+    except PermissionError:
+        return JSONResponse({"error": "Permission denied"}, status_code=403)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 @app.api_route("/root/{file_path:path}", methods=["GET", "HEAD"])
 async def serve_root_file(file_path: str):
     """Serve any file under /root directly by absolute URL."""

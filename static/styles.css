@@ -985,3 +985,27 @@ body.voice-mode .main { visibility: hidden !important; pointer-events: none !imp
 .browse-row.file { min-height: 48px; }
 .browse-row.file .file-ico { font-size: 16px; flex: none; }
 .browse-section-title { font-size: 12px; font-weight: 600; color: var(--text-3); padding: 12px 0 4px; }
+
+/* ── File explorer ── */
+.icon-btn.sm { width: 34px; height: 34px; border-radius: 10px; flex: none; }
+.browse-row.file .browse-left { flex: 1; min-width: 0; min-height: 48px; }
+.browse-row .icon-btn.sm { color: var(--text-3); }
+.browse-row .icon-btn.sm:hover { color: var(--text); background: var(--surface-3); }
+
+.fx-toolbar { display: flex; align-items: center; gap: 8px; padding: 2px 2px 8px; flex: none; }
+.fx-toolbar .btn { gap: 5px; }
+.fx-toolbar .btn[disabled] { opacity: .4; pointer-events: none; }
+.fx-readonly { margin-left: auto; font-size: 11.5px; color: var(--text-3); background: var(--surface-2); padding: 3px 9px; border-radius: 10px; }
+
+.sheet-input { width: 100%; height: 46px; padding: 0 14px; margin: 4px 0 14px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--surface-1); color: var(--text-1); font: 14px var(--mono); outline: none; }
+.sheet-input:focus { border-color: var(--accent); }
+
+.fx-menu-head { display: flex; align-items: center; gap: 10px; padding: 2px 4px 12px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+.fx-menu-head .file-ico { font-size: 18px; flex: none; }
+.fx-menu-name { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-menu-list { display: flex; flex-direction: column; gap: 2px; }
+.fx-menu-list .opt { text-decoration: none; }
+
+.fx-editor { flex: 1; min-height: 240px; resize: none; width: 100%; box-sizing: border-box; background: var(--surface-1); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; font: 12.5px/1.55 var(--mono); color: var(--text-1); tab-size: 4; outline: none; white-space: pre; overflow: auto; }
+.fx-editor:focus { border-color: var(--accent); }
+.fx-editor[readonly] { opacity: .7; }

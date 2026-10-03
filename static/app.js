@@ -326,6 +326,27 @@ function confirmSheet({ title, message, confirm = 'Confirm', danger = false }) {
   });
 }
 
+function promptSheet({ title, message, value = '', placeholder = '', confirm = 'OK' }) {
+  return new Promise((resolve) => {
+    openSheet(`
+      <h3>${esc(title)}</h3>
+      ${message ? `<p class="lead">${esc(message)}</p>` : ''}
+      <input id="promptSheetInput" class="sheet-input" type="text" value="${esc(value)}" placeholder="${esc(placeholder)}" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="sheet-actions">
+        <button class="btn" data-sheet="cancel">Cancel</button>
+        <button class="btn btn-primary" data-prompt-ok>${esc(confirm)}</button>
+      </div>`, (body) => {
+      const inp = body.querySelector('#promptSheetInput');
+      const submit = () => { const v = inp.value.trim(); sheetResolve = null; closeSheet(); resolve(v || null); };
+      body.querySelector('[data-prompt-ok]').addEventListener('click', submit);
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+      inp.focus();
+      inp.setSelectionRange(0, inp.value.lastIndexOf('.') > 0 ? inp.value.lastIndexOf('.') : inp.value.length);
+    });
+    sheetResolve = () => resolve(null);
+  });
+}
+
 $('#scrim').addEventListener('click', () => closeSheet(false));
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
@@ -743,6 +764,7 @@ async function openFileSheet(filePath) {
         `<div class="fv-binary">${esc(data.size_fmt)} binary file</div>`}
 
       <div class="fv-actions">
+        ${data.is_text ? `<button class="btn" data-fx-edit="${esc(data.path)}">${icon('i-edit')}Edit</button>` : ''}
         <button class="btn" data-attach-vm-file="${esc(data.path)}" data-name="${esc(data.name)}" data-ext="${esc(data.ext)}" data-size="${esc(data.size_fmt)}">${icon('i-plus')}Attach</button>
         <button class="btn" data-ask-file="${esc(data.path)}">${icon('i-send')}Ask agent</button>
         <button class="btn" data-copy="${esc(data.path)}">${icon('i-copy')}Copy path</button>
@@ -997,14 +1019,23 @@ async function openWorkspaceSheet(browsePath) {
     const files = data.files || [];
 
     const attach = browseMode === 'attach';
+    const explore = browseMode === 'files';
+    const title = attach ? 'Attach a file' : explore ? 'Files' : 'Browse';
     openSheet(`
       <div class="browser-top">
-        ${attach ? '' : `<button class="btn btn-ghost btn-sm" data-action="open-workspaces">${icon('i-back', 'xs')}Shortcuts</button>`}
-        <h3>${attach ? 'Attach a file' : 'Browse'}</h3>
+        ${attach || explore ? '' : `<button class="btn btn-ghost btn-sm" data-action="open-workspaces">${icon('i-back', 'xs')}Shortcuts</button>`}
+        <h3>${title}</h3>
         <button class="btn btn-ghost btn-sm" data-action="toggle-hidden-folders">${browseShowHidden ? 'Hide hidden' : 'Show hidden'}</button>
       </div>
 
       <div class="browser-crumbs">${breadcrumbHtml}</div>
+
+      ${explore ? `
+      <div class="fx-toolbar">
+        <button class="btn btn-ghost btn-sm" data-fx-new="file" ${data.writable ? '' : 'disabled'}>${icon('i-plus', 'xs')}New file</button>
+        <button class="btn btn-ghost btn-sm" data-fx-new="folder" ${data.writable ? '' : 'disabled'}>${icon('i-folder', 'xs')}New folder</button>
+        ${data.writable ? '' : '<span class="fx-readonly">Read-only</span>'}
+      </div>` : ''}
 
       <div class="browse-list">
         ${data.parent ? `
@@ -1016,19 +1047,23 @@ async function openWorkspaceSheet(browsePath) {
             <button class="browse-left browse-open" data-browse-to="${esc(d.path)}">
               ${icon('i-folder')}<span class="browse-name">${esc(d.name)}</span>${icon('i-chevron', 'xs muted')}
             </button>
-            ${attach ? '' : `<button class="use-btn" data-select-browse-ws="${esc(d.path)}">${d.path === state.workspace ? 'In use' : 'Use'}</button>`}
+            ${explore ? `<button class="icon-btn sm" data-fx-menu data-path="${esc(d.path)}" data-name="${esc(d.name)}" data-is-dir="1" aria-label="More">${icon('i-more')}</button>`
+              : attach ? '' : `<button class="use-btn" data-select-browse-ws="${esc(d.path)}">${d.path === state.workspace ? 'In use' : 'Use'}</button>`}
           </div>`).join('')}
         ${files.length ? `
           <div class="browse-section-title">Files (${files.length})</div>
           ${files.map((f) => `
-            <button class="browse-row file" data-view-file="${esc(f.path)}">
-              <span class="browse-left"><span class="file-ico">${fileIcon(f.ext)}</span><span class="browse-name">${esc(f.name)}</span></span>
-              <span class="browse-size">${esc(f.size_fmt)}</span>
-            </button>`).join('')}` : ''}
+            <div class="browse-row file">
+              <button class="browse-left" data-view-file="${esc(f.path)}">
+                <span class="file-ico">${fileIcon(f.ext)}</span><span class="browse-name">${esc(f.name)}</span>
+              </button>
+              ${explore ? `<button class="icon-btn sm" data-fx-menu data-path="${esc(f.path)}" data-name="${esc(f.name)}" data-is-dir="0" aria-label="More">${icon('i-more')}</button>`
+                : `<span class="browse-size">${esc(f.size_fmt)}</span>`}
+            </div>`).join('')}` : ''}
         ${!dirs.length && !files.length ? `<div class="browse-empty">Empty folder.</div>` : ''}
       </div>
 
-      ${attach ? '' : `
+      ${attach || explore ? '' : `
       <button class="btn btn-primary btn-block use-here" data-select-browse-ws="${esc(data.path)}">
         ${icon('i-check')} ${isCurrentActive ? 'Keep' : 'Use'} “${esc(data.name || data.path)}”
       </button>`}
@@ -1059,6 +1094,148 @@ async function openWorkspaceSheet(browsePath) {
         <button class="btn btn-primary" data-sheet="cancel">Cancel</button>
       </div>
     `);
+  }
+}
+
+/* ── File explorer operations (create / rename / delete / edit) ── */
+
+async function fxCreate(kind) {
+  const parent = currentBrowsingPath || '/root';
+  const name = await promptSheet({
+    title: kind === 'folder' ? 'New folder' : 'New file',
+    message: `In ${parent}`,
+    placeholder: kind === 'folder' ? 'folder-name' : 'file.txt',
+    confirm: 'Create',
+  });
+  if (!name) { openWorkspaceSheet(parent); return; }
+  try {
+    await api('/api/file/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent, name, is_dir: kind === 'folder' }),
+    });
+    toast(`${kind === 'folder' ? 'Folder' : 'File'} created`, 'ok');
+    openWorkspaceSheet(parent);
+  } catch (err) {
+    toast(err.message || 'Create failed', 'err');
+    openWorkspaceSheet(parent);
+  }
+}
+
+function fxMenu(path, name, isDir) {
+  openSheet(`
+    <div class="fx-menu-head">
+      <span class="file-ico">${isDir ? icon('i-folder') : fileIcon(name.split('.').pop())}</span>
+      <span class="fx-menu-name">${esc(name)}</span>
+    </div>
+    <div class="fx-menu-list">
+      ${isDir
+        ? `<button class="opt" data-fx-open="${esc(path)}"><span class="opt-ico">${icon('i-folder')}</span><span class="opt-main"><span class="opt-title">Open</span></span></button>`
+        : `<button class="opt" data-view-file="${esc(path)}"><span class="opt-ico">${icon('i-search')}</span><span class="opt-main"><span class="opt-title">View</span></span></button>
+           <button class="opt" data-fx-edit="${esc(path)}"><span class="opt-ico">${icon('i-edit')}</span><span class="opt-main"><span class="opt-title">Edit</span></span></button>
+           <a class="opt" href="/api/file/raw?path=${encodeURIComponent(path)}" download="${esc(name)}"><span class="opt-ico">${icon('i-download')}</span><span class="opt-main"><span class="opt-title">Download</span></span></a>`}
+      <button class="opt" data-fx-rename="${esc(path)}" data-name="${esc(name)}"><span class="opt-ico">${icon('i-sliders')}</span><span class="opt-main"><span class="opt-title">Rename</span></span></button>
+      <button class="opt" data-fx-copy-path="${esc(path)}"><span class="opt-ico">${icon('i-copy')}</span><span class="opt-main"><span class="opt-title">Copy path</span></span></button>
+      <button class="opt danger" data-fx-delete="${esc(path)}" data-name="${esc(name)}" data-is-dir="${isDir ? 1 : 0}"><span class="opt-ico">${icon('i-trash')}</span><span class="opt-main"><span class="opt-title">Delete</span></span></button>
+    </div>
+  `);
+}
+
+async function fxRename(path, name) {
+  const newName = await promptSheet({
+    title: 'Rename',
+    value: name,
+    confirm: 'Rename',
+  });
+  const parent = path.substring(0, path.lastIndexOf('/')) || '/';
+  if (!newName || newName === name) { openWorkspaceSheet(parent); return; }
+  try {
+    await api('/api/file/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, new_name: newName }),
+    });
+    toast('Renamed', 'ok');
+    openWorkspaceSheet(parent);
+  } catch (err) {
+    toast(err.message || 'Rename failed', 'err');
+    openWorkspaceSheet(parent);
+  }
+}
+
+async function fxDelete(path, name, isDir) {
+  const parent = path.substring(0, path.lastIndexOf('/')) || '/';
+  const ok = await confirmSheet({
+    title: `Delete "${name}"?`,
+    message: isDir ? 'This folder and everything inside it will be permanently removed.' : 'This file will be permanently removed.',
+    confirm: 'Delete',
+    danger: true,
+  });
+  if (!ok) { openWorkspaceSheet(parent); return; }
+  try {
+    await api('/api/file/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    toast('Deleted', 'ok');
+    openWorkspaceSheet(parent);
+  } catch (err) {
+    toast(err.message || 'Delete failed', 'err');
+    openWorkspaceSheet(parent);
+  }
+}
+
+async function openFileEditor(filePath) {
+  openSheet(`<div class="file-loading">Loading…</div>`);
+  try {
+    const data = await api(`/api/file/view?path=${encodeURIComponent(filePath)}`);
+    if (!data.is_text) {
+      toast('This file is not editable as text', 'err');
+      return openFileSheet(filePath);
+    }
+    const parent = data.path.substring(0, data.path.lastIndexOf('/')) || '/';
+    openSheet(`
+      <div class="fv-head">
+        <button class="icon-btn" data-view-file="${esc(data.path)}" aria-label="Back">${icon('i-back')}</button>
+        <div class="fv-info">
+          <span class="fv-name">${esc(data.name)}</span>
+          <span class="fv-meta">Editing${data.writable ? '' : ' · read-only'}</span>
+        </div>
+        <button class="icon-btn" data-fx-save aria-label="Save" ${data.writable ? '' : 'disabled'}>${icon('i-check')}</button>
+      </div>
+      <div class="fv-path">${esc(data.path)}</div>
+      <textarea id="fxEditor" class="fx-editor" spellcheck="false" ${data.writable ? '' : 'readonly'}>${esc(data.content || '')}</textarea>
+      <div class="fv-actions">
+        <button class="btn btn-primary" data-fx-save data-path="${esc(data.path)}" ${data.writable ? '' : 'disabled'}>${icon('i-check')}Save</button>
+        <button class="btn" data-view-file="${esc(data.path)}">Cancel</button>
+      </div>
+    `, (body) => {
+      body._editPath = data.path;
+      body._editParent = parent;
+      const ta = body.querySelector('#fxEditor');
+      if (ta) ta.focus();
+    });
+  } catch (err) {
+    toast(err.message || 'Could not load file', 'err');
+  }
+}
+
+async function fxSave() {
+  const body = $('#sheetBody');
+  const ta = $('#fxEditor');
+  if (!body || !ta) return;
+  const path = body._editPath;
+  try {
+    await api('/api/file/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, content: ta.value }),
+    });
+    toast('Saved', 'ok');
+    openFileSheet(path);
+  } catch (err) {
+    toast(err.message || 'Save failed', 'err');
   }
 }
 
@@ -3767,6 +3944,14 @@ document.addEventListener('click', async (e) => {
     openWorkspaceSheet(el.dataset.browseWs);
     return;
   }
+  if ((el = q('[data-fx-new]'))) { fxCreate(el.dataset.fxNew); return; }
+  if ((el = q('[data-fx-menu]'))) { fxMenu(el.dataset.path, el.dataset.name, el.dataset.isDir === '1'); return; }
+  if ((el = q('[data-fx-open]'))) { browseMode = 'files'; openWorkspaceSheet(el.dataset.fxOpen); return; }
+  if ((el = q('[data-fx-edit]'))) { openFileEditor(el.dataset.fxEdit); return; }
+  if ((el = q('[data-fx-rename]'))) { fxRename(el.dataset.fxRename, el.dataset.name); return; }
+  if ((el = q('[data-fx-delete]'))) { fxDelete(el.dataset.fxDelete, el.dataset.name, el.dataset.isDir === '1'); return; }
+  if ((el = q('[data-fx-copy-path]'))) { toast((await copyText(el.dataset.fxCopyPath)) ? 'Path copied' : 'Copy failed', 'ok'); return; }
+  if (q('[data-fx-save]')) { fxSave(); return; }
   if ((el = q('[data-new-in-ws]'))) {
     setWorkspace(el.dataset.newInWs);
     if (state.tab !== 'chat' || chromeMode() !== 'home') newChat({ focus: false });
