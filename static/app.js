@@ -399,7 +399,7 @@ document.addEventListener('keydown', (e) => {
   }
 
   let startY = 0, lastY = 0, dragging = false, startTime = 0, baseOffset = 0;
-  let touchOnGrab = false, scroller = null;
+  let touchOnGrab = false, scroller = null, startState = 'half';
 
   // The nearest scrollable element between the touch target and the sheet.
   // The sheet's body isn't the scroller — file viewers, editors and lists
@@ -423,6 +423,7 @@ document.addEventListener('keydown', (e) => {
     startY = lastY = y;
     startTime = Date.now();
     baseOffset = snapPx();
+    startState = sheet.classList.contains('full') ? 'full' : 'half';
   }
 
   sheet.addEventListener('touchstart', (e) => {
@@ -432,6 +433,7 @@ document.addEventListener('keydown', (e) => {
     startY = lastY = e.touches[0].clientY;
     startTime = Date.now();
     baseOffset = snapPx();
+    startState = sheet.classList.contains('full') ? 'full' : 'half';
     dragging = touchOnGrab;
   }, { passive: true });
 
@@ -454,8 +456,12 @@ document.addEventListener('keydown', (e) => {
     if (e.cancelable) e.preventDefault();
 
     const liveDelta = y - startY;
+    const halfPx = vh() * 0.48;
     let offset = baseOffset + liveDelta;
     if (offset < 0) offset = offset * 0.2; // rubber-band past full
+    // From full, half is the floor: resist dragging below it so a single
+    // pull-down lands on half rather than racing toward dismiss.
+    if (startState === 'full' && offset > halfPx) offset = halfPx + (offset - halfPx) * 0.2;
     sheet.style.transition = 'none';
     sheet.style.transform = `translateY(${offset}px)`;
     if (scrim) {
@@ -472,20 +478,26 @@ document.addEventListener('keydown', (e) => {
     const delta = y - startY;
     const elapsed = Date.now() - startTime;
     const velocity = elapsed > 0 ? delta / elapsed : 0; // px/ms, negative = up
-    const offset = baseOffset + delta;
 
     startY = 0; dragging = false;
 
-    // Decide which snap point to land on
-    const halfPx = vh() * 0.48;
-    const thresholds = { full: halfPx * 0.35, dismiss: halfPx + (vh() - halfPx) * 0.4 };
+    // Stepped snapping, one detent per drag:
+    //   full  →(down)→ half →(down)→ dismiss
+    //   dismiss ←(up)← half ←(up)← full
+    const STEP = vh() * 0.16;        // distance to commit to the next detent
+    const movedDown = delta > 0;
+    const far = Math.abs(delta) > STEP;
+    const fastDown = velocity > 0.5;
+    const fastUp = velocity < -0.4;
 
     let target;
-    if (velocity < -0.4) target = 'full';         // fast swipe up
-    else if (velocity > 0.5) target = 'dismiss';   // fast swipe down
-    else if (offset < thresholds.full) target = 'full';
-    else if (offset > thresholds.dismiss) target = 'dismiss';
-    else target = 'half';
+    if (startState === 'full') {
+      target = (movedDown && far) || fastDown ? 'half' : 'full';
+    } else { // started from half
+      if ((movedDown && far) || fastDown) target = 'dismiss';
+      else if ((!movedDown && far) || fastUp) target = 'full';
+      else target = 'half';
+    }
 
     sheet.classList.remove('half', 'full');
 
