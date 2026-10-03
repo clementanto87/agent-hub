@@ -279,12 +279,14 @@ let sheetResolve = null;
 function openSheet(html, onMount) {
   closeSheet();
   const s = $('#sheet');
-  if (s) { s.style.transform = ''; s.style.transition = ''; }
+  if (s) { s.style.transform = ''; s.style.transition = ''; s.classList.remove('half', 'full'); }
   const sc = $('#scrim');
   if (sc) { sc.style.opacity = ''; sc.style.transition = ''; }
   $('#sheetBody').innerHTML = html;
   $('#scrim').hidden = false;
-  $('#sheet').hidden = false;
+  s.hidden = false;
+  // Start in half-height on phones; CSS handles the max-height
+  if (window.innerWidth < 900) s.classList.add('half');
   if (onMount) onMount($('#sheetBody'));
   const first = $('#sheetBody [autofocus], #sheetBody .opt.selected, #sheetBody button');
   if (first) first.focus({ preventScroll: true });
@@ -292,9 +294,8 @@ function openSheet(html, onMount) {
 
 function closeSheet(result = null) {
   $('#scrim').hidden = true;
-  $('#sheet').hidden = true;
   const s = $('#sheet');
-  if (s) { s.style.transform = ''; s.style.transition = ''; }
+  if (s) { s.hidden = true; s.style.transform = ''; s.style.transition = ''; s.classList.remove('half', 'full'); }
   const sc = $('#scrim');
   if (sc) { sc.style.opacity = ''; sc.style.transition = ''; }
   if (sheetResolve) { const r = sheetResolve; sheetResolve = null; r(result); }
@@ -331,6 +332,7 @@ document.addEventListener('keydown', (e) => {
   let startY = 0;
   let isDragging = false;
   let startTime = 0;
+  let dragDir = 0; // -1 up, 1 down
 
   sheet.addEventListener('touchstart', (e) => {
     if (sheet.hidden || e.touches.length !== 1 || window.innerWidth >= 900) return;
@@ -342,6 +344,7 @@ document.addEventListener('keydown', (e) => {
       startY = touch.clientY;
       startTime = Date.now();
       isDragging = isGrab;
+      dragDir = 0;
     } else {
       startY = 0;
       isDragging = false;
@@ -352,18 +355,27 @@ document.addEventListener('keydown', (e) => {
     if (!startY || e.touches.length !== 1 || window.innerWidth >= 900) return;
     const touch = e.touches[0];
     const deltaY = touch.clientY - startY;
+    const isHalf = sheet.classList.contains('half');
 
+    // Swiping up (negative delta)
+    if (deltaY < -6 && isHalf) {
+      if (!isDragging) isDragging = true;
+      dragDir = -1;
+      if (isDragging && e.cancelable) e.preventDefault();
+      return;
+    }
+
+    // Swiping down (positive delta)
     if (deltaY > 6) {
-      if (!isDragging && body.scrollTop <= 0) {
-        isDragging = true;
-      }
+      if (!isDragging && body.scrollTop <= 0) isDragging = true;
+      dragDir = 1;
       if (isDragging) {
         if (e.cancelable) e.preventDefault();
         sheet.style.transition = 'none';
         sheet.style.transform = `translateY(${deltaY}px)`;
         if (scrim) scrim.style.opacity = `${Math.max(0.1, 1 - deltaY / 350)}`;
       }
-    } else if (deltaY <= 0 && isDragging) {
+    } else if (deltaY <= 0 && isDragging && dragDir === 1) {
       sheet.style.transition = 'none';
       sheet.style.transform = 'translateY(0)';
       if (scrim) scrim.style.opacity = '';
@@ -375,30 +387,53 @@ document.addEventListener('keydown', (e) => {
     const touch = e.changedTouches ? e.changedTouches[0] : null;
     const deltaY = touch ? touch.clientY - startY : 0;
     const elapsed = Date.now() - startTime;
-    const velocity = elapsed > 0 ? deltaY / elapsed : 0;
+    const velocity = elapsed > 0 ? Math.abs(deltaY) / elapsed : 0;
+    const isHalf = sheet.classList.contains('half');
 
     startY = 0;
-    if (isDragging) {
-      isDragging = false;
-      sheet.style.transition = 'transform .24s cubic-bezier(.2, .8, .2, 1)';
-      if (scrim) scrim.style.transition = 'opacity .24s ease';
+    if (!isDragging) return;
+    isDragging = false;
 
+    const ease = 'transform .28s cubic-bezier(.2, .8, .2, 1)';
+    sheet.style.transition = ease;
+    if (scrim) scrim.style.transition = 'opacity .28s ease';
+
+    // Swipe UP on half sheet → go full
+    if (dragDir === -1 && isHalf && (deltaY < -40 || velocity > 0.3)) {
+      sheet.classList.remove('half');
+      sheet.classList.add('full');
+      sheet.style.transform = '';
+      if (scrim) scrim.style.opacity = '';
+      setTimeout(() => { sheet.style.transition = ''; if (scrim) scrim.style.transition = ''; }, 300);
+      return;
+    }
+
+    // Swipe DOWN
+    if (dragDir === 1) {
+      const isFull = sheet.classList.contains('full');
+      // From full → snap to half
+      if (isFull && deltaY > 60 && deltaY < 250) {
+        sheet.classList.remove('full');
+        sheet.classList.add('half');
+        sheet.style.transform = '';
+        if (scrim) scrim.style.opacity = '';
+        body.scrollTop = 0;
+        setTimeout(() => { sheet.style.transition = ''; if (scrim) scrim.style.transition = ''; }, 300);
+        return;
+      }
+      // Dismiss
       if (deltaY > 90 || (velocity > 0.4 && deltaY > 25)) {
         sheet.style.transform = 'translateY(100%)';
         if (scrim) scrim.style.opacity = '0';
-        setTimeout(() => {
-          closeSheet(false);
-        }, 220);
-      } else {
-        sheet.style.transform = 'translateY(0)';
-        if (scrim) scrim.style.opacity = '';
-        setTimeout(() => {
-          sheet.style.transform = '';
-          sheet.style.transition = '';
-          if (scrim) scrim.style.transition = '';
-        }, 240);
+        setTimeout(() => closeSheet(false), 220);
+        return;
       }
     }
+
+    // Snap back
+    sheet.style.transform = 'translateY(0)';
+    if (scrim) scrim.style.opacity = '';
+    setTimeout(() => { sheet.style.transform = ''; sheet.style.transition = ''; if (scrim) scrim.style.transition = ''; }, 300);
   };
 
   sheet.addEventListener('touchend', endDrag, { passive: true });
@@ -681,54 +716,38 @@ function openAttachSheet() {
 }
 
 async function openFileSheet(filePath) {
-  openSheet(`
-    <div style="color:var(--text-3); font-size:13px; text-align:center; padding:24px 0;">Loading file details…</div>
-  `);
+  openSheet(`<div class="file-loading">Loading…</div>`);
   try {
     const data = await api(`/api/file/view?path=${encodeURIComponent(filePath)}`);
     const parent = data.path.substring(0, data.path.lastIndexOf('/')) || '/';
-    const iconStr = fileIcon(data.ext);
+    const lines = data.is_text && data.content ? data.content.split('\n') : [];
+    const lineCount = lines.length;
+    const numbered = lines.map((l, i) => `<span class="ln">${i + 1}</span>${esc(l)}`).join('\n');
+    const isImage = ['png','jpg','jpeg','gif','webp','svg','ico','bmp'].includes(data.ext);
 
     openSheet(`
-      <div class="browser-header">
-        <div style="display:flex; align-items:center; gap:8px;">
-          <span style="font-size:22px;">${iconStr}</span>
-          <div style="min-width:0; flex:1;">
-            <h3 style="margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(data.name)}</h3>
-            <div style="font-size:12px; color:var(--text-3); font-family:var(--mono);">${esc(data.size_fmt)} · ${esc(data.ext ? '.' + data.ext : 'file')}</div>
-          </div>
+      <div class="fv-head">
+        <button class="icon-btn" data-browse-to="${esc(parent)}" aria-label="Back">${icon('i-back')}</button>
+        <div class="fv-info">
+          <span class="fv-name">${esc(data.name)}</span>
+          <span class="fv-meta">${esc(data.size_fmt)}${lineCount ? ` · ${lineCount} lines` : ''} · ${esc(data.ext || 'file')}</span>
         </div>
-        <div style="font-size:11px; color:var(--text-3); font-family:var(--mono); word-break:break-all; background:var(--surface-2); padding:6px 8px; border-radius:6px; border:1px solid var(--line);">
-          ${esc(data.path)}
-        </div>
+        <button class="icon-btn" data-copy-file-content aria-label="Copy contents">${icon('i-copy')}</button>
       </div>
+      <div class="fv-path">${esc(data.path)}</div>
 
-      <div class="sheet-actions" style="margin-top:2px;">
-        <button class="btn btn-primary" data-attach-vm-file="${esc(data.path)}" data-name="${esc(data.name)}" data-ext="${esc(data.ext)}" data-size="${esc(data.size_fmt)}" style="height:42px;">
-          📎 Attach to Chat
-        </button>
-        <button class="btn" data-ask-file="${esc(data.path)}" style="height:42px;">
-          💬 Ask Agent
-        </button>
-        <button class="btn" data-copy="${esc(data.path)}" style="height:42px;">
-          📋 Copy
-        </button>
-        <button class="btn btn-ghost" data-browse-to="${esc(parent)}" style="height:42px;">
-          🔙 Back
-        </button>
+      ${isImage ? `<div class="fv-image"><img src="/api/file/raw?path=${encodeURIComponent(data.path)}" alt="${esc(data.name)}"></div>` :
+        data.is_text && data.content !== null ? `<pre class="fv-code">${numbered}</pre>` :
+        `<div class="fv-binary">${esc(data.size_fmt)} binary file</div>`}
+
+      <div class="fv-actions">
+        <button class="btn" data-attach-vm-file="${esc(data.path)}" data-name="${esc(data.name)}" data-ext="${esc(data.ext)}" data-size="${esc(data.size_fmt)}">${icon('i-plus')}Attach</button>
+        <button class="btn" data-ask-file="${esc(data.path)}">${icon('i-send')}Ask agent</button>
+        <button class="btn" data-copy="${esc(data.path)}">${icon('i-copy')}Copy path</button>
       </div>
-
-      ${data.is_text && data.content !== null ? `
-        <div style="margin-top:6px;">
-          <div style="font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-3); margin-bottom:4px;">File Preview</div>
-          <pre class="file-preview-box">${esc(data.content)}</pre>
-        </div>
-      ` : `
-        <div style="color:var(--text-3); font-size:12.5px; text-align:center; padding:18px; background:var(--surface-1); border-radius:8px; border:1px solid var(--line);">
-          Binary or large document (${esc(data.size_fmt)}). Available to all agents via VM path.
-        </div>
-      `}
-    `);
+    `, (body) => {
+      body._fileContent = data.content || '';
+    });
   } catch (err) {
     toast(err.message || 'Could not load file', 'err');
     openWorkspaceSheet(currentBrowsingPath || '/root');
@@ -979,7 +998,7 @@ async function openWorkspaceSheet(browsePath) {
     openSheet(`
       <div class="browser-top">
         ${attach ? '' : `<button class="btn btn-ghost btn-sm" data-action="open-workspaces">${icon('i-back', 'xs')}Shortcuts</button>`}
-        <h3>${attach ? 'Attach a file from the VM' : 'Browse folders'}</h3>
+        <h3>${attach ? 'Attach a file' : 'Browse'}</h3>
         <button class="btn btn-ghost btn-sm" data-action="toggle-hidden-folders">${browseShowHidden ? 'Hide hidden' : 'Show hidden'}</button>
       </div>
 
@@ -997,14 +1016,14 @@ async function openWorkspaceSheet(browsePath) {
             </button>
             ${attach ? '' : `<button class="use-btn" data-select-browse-ws="${esc(d.path)}">${d.path === state.workspace ? 'In use' : 'Use'}</button>`}
           </div>`).join('')}
-        ${attach && files.length ? `
-          <div class="browse-section-title">Files</div>
+        ${files.length ? `
+          <div class="browse-section-title">Files (${files.length})</div>
           ${files.map((f) => `
-            <button class="browse-row" data-view-file="${esc(f.path)}">
-              <span class="browse-left"><span style="font-size:16px;">${fileIcon(f.ext)}</span><span class="browse-name">${esc(f.name)}</span></span>
+            <button class="browse-row file" data-view-file="${esc(f.path)}">
+              <span class="browse-left"><span class="file-ico">${fileIcon(f.ext)}</span><span class="browse-name">${esc(f.name)}</span></span>
               <span class="browse-size">${esc(f.size_fmt)}</span>
             </button>`).join('')}` : ''}
-        ${!dirs.length && (!attach || !files.length) ? `<div class="browse-empty">No ${attach ? '' : 'sub'}folders here.</div>` : ''}
+        ${!dirs.length && !files.length ? `<div class="browse-empty">Empty folder.</div>` : ''}
       </div>
 
       ${attach ? '' : `
@@ -1236,7 +1255,8 @@ function folderHead(ws, count) {
     ${icon('i-folder', 'xs')}
     <span class="folder-head-main"><span class="folder-head-name">${esc(ws ? basename(ws) : 'No folder')}</span>${ws ? `<span class="folder-head-path">${esc(prettyPath(ws))}</span>` : ''}</span>
     <span class="folder-head-count">${count}</span>
-    ${ws ? `<button class="icon-btn sm" data-new-in-ws="${esc(ws)}" aria-label="New task in ${esc(basename(ws))}" title="New task in this folder">${icon('i-plus')}</button>` : ''}
+    ${ws ? `<button class="icon-btn sm" data-browse-ws="${esc(ws)}" aria-label="Browse files in ${esc(basename(ws))}" title="Browse files">${icon('i-folder')}</button>
+    <button class="icon-btn sm" data-new-in-ws="${esc(ws)}" aria-label="New task in ${esc(basename(ws))}" title="New task in this folder">${icon('i-plus')}</button>` : ''}
   </div>`;
 }
 
@@ -3239,6 +3259,12 @@ document.addEventListener('click', async (e) => {
   if ((el = q('[data-sheet]'))) { closeSheet(el.dataset.sheet === 'ok'); return; }
   if ((el = q('[data-goto]'))) { closeSheet(); switchTab(el.dataset.goto); return; }
   if ((el = q('[data-key]'))) { pressKey(el.dataset.key); return; }
+  if ((el = q('[data-copy-file-content]'))) {
+    const body = el.closest('.sheet-body');
+    const ok = await copyText(body?._fileContent || '');
+    toast(ok ? 'File contents copied' : 'Copy failed', ok ? 'ok' : 'err');
+    return;
+  }
   if ((el = q('[data-copy]'))) { if (el.dataset.copy) toast((await copyText(el.dataset.copy)) ? 'Copied' : 'Copy failed', 'ok'); return; }
   if ((el = q('[data-copy-code]'))) {
     const ok = await copyText($('pre', el.closest('.codeblock')).innerText);
@@ -3272,6 +3298,11 @@ document.addEventListener('click', async (e) => {
     const ws = el.dataset.expandWs;
     if (state.expandedWs.has(ws)) state.expandedWs.delete(ws); else state.expandedWs.add(ws);
     renderRail(); if (chromeMode() === 'home') renderHome();
+    return;
+  }
+  if ((el = q('[data-browse-ws]'))) {
+    browseMode = 'files';
+    openWorkspaceSheet(el.dataset.browseWs);
     return;
   }
   if ((el = q('[data-new-in-ws]'))) {
