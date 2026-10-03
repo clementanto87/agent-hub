@@ -468,7 +468,7 @@ async def stream_agent(agent_name: str, prompt: str, workspace: str = None, mode
             "-p", enriched_prompt,
             "--output-format", "stream-json",
             "--verbose",
-            "--allowed-tools", "Bash,Edit,Read,Write,Glob,Grep,mcp__pet-memory__*",
+            "--allowed-tools", "Bash,Edit,Read,Write,Glob,Grep,mcp__pet-memory__*,mcp__vault__*,mcp__icloud__*",
             "--append-system-prompt", GLOBAL_SYSTEM_PROMPT,
             "--add-dir", "/",
             "--add-dir", "/root/workspace",

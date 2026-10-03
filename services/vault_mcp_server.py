@@ -13,9 +13,9 @@ from typing import Optional, Dict, Any, List
 
 sys.path.insert(0, "/root/agent-hub")
 from services import vault_service
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("vault-credentials")
+mcp = MCPServer("vault-credentials")
 
 @mcp.tool()
 def vault_list() -> List[Dict[str, Any]]:
