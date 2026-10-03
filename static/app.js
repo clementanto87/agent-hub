@@ -347,27 +347,31 @@ document.addEventListener('keydown', (e) => {
 
   let startY = 0, lastY = 0, dragging = false, startTime = 0, baseOffset = 0;
 
+  let touchOnGrab = false;
+
   sheet.addEventListener('touchstart', (e) => {
     if (sheet.hidden || e.touches.length !== 1 || window.innerWidth >= 900) return;
-    const isGrab = !!e.target.closest('.sheet-grab');
+    touchOnGrab = !!e.target.closest('.sheet-grab');
+    const isHalf = sheet.classList.contains('half');
     const atTop = body.scrollTop <= 0;
-    if (!isGrab && !atTop) { startY = 0; return; }
+    if (!touchOnGrab && !atTop && !isHalf) { startY = 0; return; }
     startY = lastY = e.touches[0].clientY;
     startTime = Date.now();
     baseOffset = snapPx();
-    dragging = isGrab; // grab handle always starts drag; scroll-top starts on move
+    dragging = touchOnGrab;
   }, { passive: true });
 
   sheet.addEventListener('touchmove', (e) => {
     if (!startY || e.touches.length !== 1 || window.innerWidth >= 900) return;
     const y = e.touches[0].clientY;
     const delta = y - startY;
+    const isHalf = sheet.classList.contains('half');
     lastY = y;
 
-    // Start dragging if pulling down from scroll top
-    if (!dragging && body.scrollTop <= 0 && delta > 6) dragging = true;
-    // Start dragging on grab handle when pulling up
-    if (!dragging && e.target.closest('.sheet-grab') && delta < -6) dragging = true;
+    // In half state, any swipe up starts drag (expand to full)
+    if (!dragging && isHalf && delta < -10) dragging = true;
+    // Pulling down from scroll top or grab handle
+    if (!dragging && (body.scrollTop <= 0 || touchOnGrab) && delta > 6) dragging = true;
 
     if (!dragging) return;
     if (e.cancelable) e.preventDefault();
