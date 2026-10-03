@@ -638,6 +638,24 @@ async def memory_status_endpoint():
     status = await asyncio.to_thread(get_memory_status)
     return status
 
+@app.get("/api/whatsapp/status")
+async def whatsapp_status_endpoint():
+    import urllib.request
+    try:
+        req = urllib.request.Request("http://127.0.0.1:8085/status")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = json.loads(resp.read().decode())
+            return data
+    except Exception as e:
+        return {"status": "offline", "error": str(e)}
+
+@app.get("/api/whatsapp/qr")
+async def whatsapp_qr_endpoint():
+    qr_img = os.path.join(STATIC_DIR, "whatsapp-qr.png")
+    if os.path.exists(qr_img):
+        return FileResponse(qr_img, media_type="image/png", headers={"Cache-Control": "no-store"})
+    return JSONResponse({"error": "No QR code available"}, status_code=404)
+
 @app.get("/api/memory/recall")
 async def memory_recall_endpoint(q: str, limit: int = 5):
     memories = await asyncio.to_thread(recall_memory, q, limit)
