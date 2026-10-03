@@ -376,15 +376,36 @@ document.addEventListener('keydown', (e) => {
   }
 
   let startY = 0, lastY = 0, dragging = false, startTime = 0, baseOffset = 0;
+  let touchOnGrab = false, scroller = null;
 
-  let touchOnGrab = false;
+  // The nearest scrollable element between the touch target and the sheet.
+  // The sheet's body isn't the scroller — file viewers, editors and lists
+  // each have their own overflow container, so we must check the real one.
+  function scrollableUnder(node) {
+    let el = node;
+    while (el && el !== sheet) {
+      if (el.nodeType === 1 && el.scrollHeight > el.clientHeight + 1) {
+        const oy = getComputedStyle(el).overflowY;
+        if (oy === 'auto' || oy === 'scroll') return el;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  // Begin a sheet drag from the current finger position (rebases the origin
+  // so the sheet doesn't jump when the gesture is recognised mid-scroll).
+  function beginDrag(y) {
+    dragging = true;
+    startY = lastY = y;
+    startTime = Date.now();
+    baseOffset = snapPx();
+  }
 
   sheet.addEventListener('touchstart', (e) => {
     if (sheet.hidden || e.touches.length !== 1 || window.innerWidth >= 900) return;
     touchOnGrab = !!e.target.closest('.sheet-grab');
-    const isHalf = sheet.classList.contains('half');
-    const atTop = body.scrollTop <= 0;
-    if (!touchOnGrab && !atTop && !isHalf) { startY = 0; return; }
+    scroller = touchOnGrab ? null : scrollableUnder(e.target);
     startY = lastY = e.touches[0].clientY;
     startTime = Date.now();
     baseOffset = snapPx();
@@ -396,21 +417,22 @@ document.addEventListener('keydown', (e) => {
     const y = e.touches[0].clientY;
     const delta = y - startY;
     const isHalf = sheet.classList.contains('half');
+    const atTop = !scroller || scroller.scrollTop <= 0;
     lastY = y;
 
-    // In half state, any swipe up starts drag (expand to full)
-    if (!dragging && isHalf && delta < -10) dragging = true;
-    // Pulling down from scroll top or grab handle
-    if (!dragging && (body.scrollTop <= 0 || touchOnGrab) && delta > 6) dragging = true;
+    if (!dragging) {
+      // Swipe up while half → expand to full (only when inner content is at its top)
+      if (isHalf && atTop && delta < -10) beginDrag(y);
+      // Pull down while the inner content is at its top → collapse / dismiss
+      else if (atTop && delta > 6) beginDrag(y);
+      else return; // let the inner element scroll natively
+    }
 
-    if (!dragging) return;
     if (e.cancelable) e.preventDefault();
 
-    // Compute new offset: base + delta, clamped so it can't go above 0 (full)
-    let offset = baseOffset + delta;
-    // Rubber-band past full (negative offset = above full)
-    if (offset < 0) offset = offset * 0.2;
-
+    const liveDelta = y - startY;
+    let offset = baseOffset + liveDelta;
+    if (offset < 0) offset = offset * 0.2; // rubber-band past full
     sheet.style.transition = 'none';
     sheet.style.transform = `translateY(${offset}px)`;
     if (scrim) {
