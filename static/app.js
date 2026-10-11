@@ -1899,7 +1899,7 @@ function addUserMessage(text, ts, attachments = []) {
     `).join('')}</div>`;
   }
 
-  el.innerHTML = `<div class="bubble">${attachHtml}${esc(text)}</div>
+  el.innerHTML = `<div class="bubble">${attachHtml}${mentionHtml(text)}</div>
     <div class="msg-actions"><span class="msg-time">${clock(ts)}</span><button class="act" data-copy-user aria-label="Copy message">${icon('i-copy')}Copy</button></div>`;
   el._text = text;
   innerThread().appendChild(el);
@@ -2968,6 +2968,14 @@ async function pollUsage() {
     }
   } catch {
     /* ignore usage poll error */
+  const mentioned = findMentions(prompt);
+  if (mentioned.length) {
+    const lines = mentioned.map((m) => m.kind === 'Connector'
+      ? `- ${m.label} (mail connector): use the ${m.id === 'm365' ? 'outlook' : 'email'} MCP tools (mcp__${m.id === 'm365' ? 'outlook' : 'email'}__*)`
+      : `- ${m.label} (MCP server): use its tools (mcp__${m.id}__*)`).join('\n');
+    enrichedPrompt = `[User explicitly selected these integrations with @ — use them for this request]:\n${lines}\n\n${enrichedPrompt}`;
+  }
+
   }
 }
 
@@ -4211,7 +4219,8 @@ document.addEventListener('keydown', (e) => {
 $('#keybar').addEventListener('mousedown', (e) => e.preventDefault());
 
 const input = $('#promptInput');
-input.addEventListener('input', () => { autosize(); store.set('draft', input.value); });
+input.addEventListener('input', () => { autosize(); store.set('draft', input.value); updateMention(); });
+input.addEventListener('blur', () => setTimeout(closeMention, 150));
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && state.prefs.enter) { e.preventDefault(); send(); }
 });
@@ -4389,3 +4398,105 @@ async function boot() {
 }
 
 boot();
+/* ════════════════════════════════════════════════════════════
+   @-mention picker (MCP servers & connectors)
+   ════════════════════════════════════════════════════════════ */
+
+const CONNECTOR_MENTIONS = [
+  { id: 'gmail', label: 'Gmail', kind: 'Connector', sub: 'Mail connector', ico: 'i-chat' },
+  { id: 'm365', label: 'Outlook Email', kind: 'Connector', sub: 'Microsoft 365 mail', ico: 'i-chat' },
+];
+const mentionState = { open: false, items: [], idx: 0, start: -1 };
+
+function mentionSources() {
+  const mcp = (allMcpServers || []).map((m) => ({ id: m.name, label: m.name, kind: 'MCP', sub: m.command || m.url || m.type || 'MCP server', ico: 'i-link' }));
+  return [...CONNECTOR_MENTIONS, ...mcp];
+}
+
+function findMentions(text) {
+  const out = [];
+  for (const m of mentionSources()) {
+    const re = new RegExp(`(^|\\s)@${(m.label.replace(/\s+/g, '-')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[\\s.,;:!?])`, 'i');
+    if (re.test(text || '')) out.push(m);
+  }
+  return out;
+}
+
+function mentionHtml(text) {
+  let html = esc(text);
+  for (const m of mentionSources()) {
+    const tok = esc('@' + m.label.replace(/\s+/g, '-'));
+    const re = new RegExp(`(^|\\s)(${tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})(?=$|[\\s.,;:!?])`, 'gi');
+    html = html.replace(re, (_, pre, t) => `${pre}<span class="mention-pill ${m.kind === 'MCP' ? 'mcp' : 'conn'}">${t}</span>`);
+  }
+  return html;
+}
+
+function mentionQuery() {
+  const t = $('#promptInput');
+  const pos = t.selectionStart ?? t.value.length;
+  const m = /(^|\s)@([\w.\-]*)$/.exec(t.value.slice(0, pos));
+  return m ? { q: m[2].toLowerCase(), start: pos - m[2].length - 1 } : null;
+}
+
+function closeMention() {
+  mentionState.open = false;
+  const el = $('#mentionMenu');
+  if (el) el.hidden = true;
+}
+
+async function updateMention() {
+  const mq = mentionQuery();
+  if (!mq) return closeMention();
+  if (!allMcpServers.length && !mentionState.loaded) {
+    mentionState.loaded = true;
+    try { allMcpServers = (await api('/api/mcp')).servers || []; } catch {}
+  }
+  const norm = (x) => x.toLowerCase().replace(/[\s_]+/g, '-');
+  const items = mentionSources().filter((m) => !mq.q || norm(m.label).includes(mq.q) || m.id.toLowerCase().includes(mq.q));
+  if (!items.length) return closeMention();
+  mentionState.items = items; mentionState.idx = 0; mentionState.start = mq.start; mentionState.open = true;
+  renderMention();
+}
+
+function renderMention() {
+  let el = $('#mentionMenu');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'mentionMenu'; el.className = 'mention-menu'; el.setAttribute('role', 'listbox');
+    $('#composer').prepend(el);
+    el.addEventListener('mousedown', (e) => e.preventDefault());
+    el.addEventListener('click', (e) => {
+      const row = e.target.closest('[data-mi]');
+      if (row) pickMention(+row.dataset.mi);
+    });
+  }
+  el.hidden = false;
+  el.innerHTML = mentionState.items.map((m, i) => `
+    <div class="mention-row${i === mentionState.idx ? ' on' : ''}" role="option" data-mi="${i}">
+      <span class="mention-ico ${m.kind === 'MCP' ? 'mcp' : 'conn'}">${icon(m.ico)}</span>
+      <span class="mention-main"><span class="mention-name">${esc(m.label)}</span><span class="mention-sub">${esc(m.sub)}</span></span>
+      <span class="mention-kind">${m.kind === 'MCP' ? 'MCP' : 'Connector'}</span>
+    </div>`).join('');
+  el.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+}
+
+function pickMention(i) {
+  const m = mentionState.items[i];
+  const t = $('#promptInput');
+  if (!m) return;
+  const pos = t.selectionStart ?? t.value.length;
+  const tok = '@' + m.label.replace(/\s+/g, '-') + ' ';
+  t.value = t.value.slice(0, mentionState.start) + tok + t.value.slice(pos);
+  const caret = mentionState.start + tok.length;
+  t.setSelectionRange(caret, caret);
+  closeMention(); autosize(); store.set('draft', t.value); t.focus();
+}
+
+  if (mentionState.open) {
+    const n = mentionState.items.length;
+    if (e.key === 'ArrowDown') { e.preventDefault(); mentionState.idx = (mentionState.idx + 1) % n; return renderMention(); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); mentionState.idx = (mentionState.idx - 1 + n) % n; return renderMention(); }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return pickMention(mentionState.idx); }
+    if (e.key === 'Escape') { e.preventDefault(); return closeMention(); }
+  }
