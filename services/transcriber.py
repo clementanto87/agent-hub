@@ -15,10 +15,13 @@ def get_whisper():
     global _whisper_model
     if _whisper_model is None:
         try:
-            _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+            # base.en + greedy decoding is ~2x faster than multilingual base + beam 3 on this 2-core VM.
+            # Set WHISPER_MODEL=base for non-English speech.
+            _whisper_model = WhisperModel(os.environ.get("WHISPER_MODEL", "base.en"), device="cpu",
+                                          compute_type="int8", cpu_threads=os.cpu_count() or 2)
         except Exception as e:
-            print(f"Error loading base Whisper, falling back to tiny: {e}")
-            _whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
+            print(f"Error loading Whisper, falling back to tiny.en: {e}")
+            _whisper_model = WhisperModel("tiny.en", device="cpu", compute_type="int8")
     return _whisper_model
 
 def decode_audio(path: str, sample_rate: int = 16000) -> np.ndarray:
@@ -85,14 +88,16 @@ def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/webm", agent: s
             "Return only the clean transcript text without quotes or notes."
         )
 
-    # 1. Native Google Gemini Multimodal Audio-to-Text (State-of-the-Art accuracy & speed)
+    # 1. Native Google Gemini Multimodal Audio-to-Text (only when a key is configured)
     try:
+        if not API_KEY:
+            raise RuntimeError("no Gemini API key configured")
         clean_mime = mime_type.split(";")[0].strip().lower()
         valid_mimes = ["audio/wav", "audio/mp3", "audio/webm", "audio/mp4", "audio/aac", "audio/ogg", "audio/m4a"]
         if clean_mime not in valid_mimes:
             clean_mime = "audio/mp4" if "mp4" in mime_type or "m4a" in mime_type else "audio/webm"
 
-        client = genai.Client(api_key=API_KEY)
+        client = genai.Client(api_key=API_KEY, http_options=types.HttpOptions(timeout=10000))  # slow/hung call → Whisper fallback
         response = client.models.generate_content(
             model='gemini-3.1-flash-lite',
             contents=[
@@ -105,7 +110,8 @@ def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/webm", agent: s
             if text:
                 return text
     except Exception as gemini_err:
-        print(f"Native Gemini transcription error: {gemini_err}")
+        if API_KEY:
+            print(f"Gemini transcription failed, using local Whisper: {gemini_err}")
 
     # 2. Local Whisper Fallback (Offline fallback)
     try:
@@ -119,7 +125,8 @@ def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/webm", agent: s
             audio = decode_audio(tmp_path)
             if audio.size < 1600:
                 return ""
-            segments, info = whisper.transcribe(audio, beam_size=3, vad_filter=True)
+            segments, info = whisper.transcribe(audio, beam_size=1, vad_filter=False,
+                                                condition_on_previous_text=False, without_timestamps=True)
             transcript = " ".join([seg.text.strip() for seg in segments]).strip()
             if transcript:
                 return transcript

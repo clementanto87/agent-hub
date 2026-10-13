@@ -44,14 +44,57 @@ All service credentials, passwords, 2FA/TOTP keys, and API tokens are securely m
 - Automated headless browser login: `vault login <service>` (logs in via Playwright Chrome, handles 2FA, and saves session cookies to `/root/.vault/sessions/<service>.json` for persistent authenticated requests).
 - All agents should gear credentials directly from the vault to perform automated site logins and authenticated operations without asking the user to manually paste secrets.
 
+Live User Location & Travel Context:
+The user's live coordinates and address are tracked in /root/workspace/scripts/CURRENT_LOCATION.json (starts as home in Berlin; changes during travel).
+- Stable home reference: /root/workspace/scripts/HOME_LOCATION.json (Grünauer Straße 16, 12524 Berlin; 52.4119, 13.5698; TZ Europe/Berlin; PROFILE.md Section 7).
+- The `location` CLI (/usr/local/bin/location) provides real-time location tools:
+  * Current summary: `location` or `location json`
+  * Weather at current location: `location weather`
+  * Nearby places: `location nearby attraction 10`, `location nearby restaurant 8`, `location nearby cafe 5`
+  * Local time & timezone: `location time`
+  * Distance from home: `location distance`
+  * Q&A: `location ask "<question>"`
+  * Travel update: `location set "<place>"`
+  * Reset to home: `location home`
+- Whenever the user asks about "near me", local attractions, restaurants, activities, weather, local time, or travel distance, ALWAYS consult /root/workspace/scripts/CURRENT_LOCATION.json or use `/usr/local/bin/location`!
+
 Important Knowledge & Master Records Hierarchy:
 1. Persistent Semantic Memory: Checked first via pet-memory (`memory recall`).
 2. Encrypted Credentials Vault: Checked via `vault get <service>` or `vault list`.
-3. Master Ground Truth Profile: /root/Documents/Personal/PROFILE.md (Tax IDs, Passports, RVNR, KVNR, bank accounts, dates of birth, addresses).
-4. Master Personal Records Index: /root/Documents/Personal/README.md
-5. AgentHub Application Guide: /root/agent-hub/README.md
-6. Active Workspace: /root/Documents/antigravity/clever-einstein
+3. Live User Location: Checked via /root/workspace/scripts/CURRENT_LOCATION.json or `location` CLI.
+4. Master Ground Truth Profile: /root/Documents/Personal/PROFILE.md (Tax IDs, Passports, RVNR, KVNR, bank accounts, dates of birth, addresses).
+5. Master Personal Records Index: /root/Documents/Personal/README.md
+6. AgentHub Application Guide: /root/agent-hub/README.md
+7. Active Workspace: /root/Documents/antigravity/clever-einstein
 """
+
+# How replies are rendered in the AgentHub chat. These are plain markdown, so they degrade gracefully anywhere else.
+FORMAT_GUIDE = """USER VISUAL-FIRST PRESENTATION DIRECTIVE:
+The user explicitly dislikes long, dense walls/paragraphs of text. Keep text minimal, concise, crisp, and easily readable (1-2 sentences max per idea).
+Present information visually using rich UI components:
+- Key Numbers & Facts -> Bullet list of `- **Label:** value (optional note)`. AgentHub renders these as sleek Stat Tiles.
+- Tables -> Markdown tables for records, options, lists, files. Put the identifier in the first column and use a `Status` column (Success, Failed, Pending, Active, Warning, Skipped) with dates in YYYY-MM-DD HH:MM UTC.
+- Key Takeaways & Alerts -> Callouts: `> [!NOTE]`, `> [!TIP]`, `> [!WARNING]`, `> [!IMPORTANT]`, `> [!CAUTION]`, or one-line status `> ✅ text` / `> ❌ text`.
+- Workflows & Pipelines -> ````steps ```` with JSON: {"steps":[{"label":"Build","state":"done"},{"label":"Test","state":"current"},{"label":"Deploy"}]}. States: done/current/failed/warn.
+- Multi-step Tasks & Progress -> Task lists (`- [x] done`, `- [ ] todo`) which render with interactive progress bars.
+- Architectural Diagrams & Flows -> Mermaid diagrams (```mermaid flowcharts, sequence diagrams, state diagrams, ERDs).
+- Configurations & Record Dossiers -> ````kv ```` with JSON: {"title":"Server Info","items":[{"key":"Host","value":"vm-1","mono":true},{"key":"Status","value":"Active"}]}.
+- Health & Resource Metrics -> ````gauge ```` or ````rings ```` with JSON: {"items":[{"label":"Disk","value":62,"max":100,"unit":"%"},{"label":"CPU","value":3,"max":8,"unit":"cores"}]}.
+- Comparison / Before vs After -> ````compare ```` with JSON: {"cards":[{"title":"Before","items":[{"text":"2.1s p95","bad":true}]},{"title":"After","recommended":true,"items":[{"text":"380ms p95","good":true}]}]}.
+- Headline Numbers & Trends -> ````metrics ```` with JSON: {"items":[{"label":"Requests","value":"1.2k","icon":"i-pulse","spark":[3,5,4,8,9]},{"label":"Errors","value":"12","tone":"bad"}]}.
+- Trends Over Time -> ````spark ```` with JSON: {"title":"CPU Load","unit":"%","values":[12,18,15,30,22]}.
+- Real Measured Data Comparisons -> ````chart ```` with JSON: {"type":"bar","title":"Disk usage","unit":"GB","labels":["/","/boot","/data"],"values":[25,1,140]}. (types: bar, line, donut).
+- Chronological Events -> ````timeline ```` with lines: `2026-09-21 12:36 | Title | optional detail | ok` (tones: ok, warn, bad, info).
+- Folder & File Structure -> ````tree ```` plain text directory tree.
+- Badges & Status Tags -> ````badges ```` with JSON: {"items":[{"label":"API","value":"200","tone":"ok"}]}.
+- Test & Compatibility Matrix -> ````matrix ```` with JSON: {"cols":["linux","mac","win"],"rows":[{"label":"build","cells":["pass","pass","fail"]}]}.
+- Math -> ````math ```` (LaTeX) or inline `$…$`.
+- Code & Commands -> Standard fenced code blocks.
+
+STRICT RULE: Avoid long paragraphs and text walls. Use diagrams, stat tiles, tables, callouts, and visual widgets instead of essay-style text. Keep any accompanying prose short, clean, and scannable.
+If the request says it is a voice conversation, ignore all of the above and answer in plain spoken sentences."""
+
+GLOBAL_SYSTEM_PROMPT += "\n\n" + FORMAT_GUIDE
 
 async def _safe_read_lines(stream) -> AsyncGenerator[str, None]:
     """
@@ -125,13 +168,13 @@ def _format_activity(icon: str, label: str, detail: str, is_active: bool = True)
     }
     return f"<!-- ACTIVITY: {json.dumps(act)} -->\n"
 
-async def _pump_claude_stream_json(proc) -> AsyncGenerator[str, None]:
+async def _pump_claude_stream_json(proc, agent_name: str = "Claude Code", icon: str = "🟣") -> AsyncGenerator[str, None]:
     """
     Parses Anthropic Claude Code stream-json event stream, emits real-time tool/MCP/skill/file
     activity indicators, and streams assistant text deltas.
     """
     has_yielded_text = False
-    yield _format_activity("🟣", "Claude Code", "Initializing…", True)
+    yield _format_activity(icon, agent_name, "Initializing…", True)
     try:
         async for raw_line in _safe_read_lines(proc.stdout):
             line = raw_line.strip()
@@ -305,12 +348,12 @@ async def _pump_agy_stream_json(proc) -> AsyncGenerator[str, None]:
                 _signal_group(proc, signal.SIGKILL)
                 await proc.wait()
 
-async def _pump_codex_json(proc) -> AsyncGenerator[str, None]:
+async def _pump_codex_json(proc, label="Codex", icon="🟢") -> AsyncGenerator[str, None]:
     """
     Parses OpenAI Codex JSON event stream, emits tool activity, and extracts clean markdown responses.
     """
     has_yielded = False
-    yield _format_activity("🟢", "Codex", "Initializing…", True)
+    yield _format_activity(icon, label, "Initializing…", True)
     try:
         async for raw_line in _safe_read_lines(proc.stdout):
             line = raw_line.strip()
@@ -336,7 +379,7 @@ async def _pump_codex_json(proc) -> AsyncGenerator[str, None]:
                             yield text + "\n\n"
                             has_yielded = True
                 elif ev_type == "error":
-                    err_msg = event.get("message") or "Codex encountered an error"
+                    err_msg = event.get("message") or f"{label} encountered an error"
                     yield f"\n⚠️ *Error:* {err_msg}\n\n"
                     has_yielded = True
             except json.JSONDecodeError:
@@ -346,7 +389,7 @@ async def _pump_codex_json(proc) -> AsyncGenerator[str, None]:
                     has_yielded = True
         await proc.wait()
         if proc.returncode != 0 and not has_yielded:
-            yield f"\n⚠️ *(Codex process exited with code {proc.returncode})*\n"
+            yield f"\n⚠️ *({label} process exited with code {proc.returncode})*\n"
     finally:
         if proc.returncode is None:
             _signal_group(proc, signal.SIGTERM)
@@ -390,17 +433,11 @@ async def stream_agent(agent_name: str, prompt: str, workspace: str = None, mode
     
     agent = agent_name.lower().strip()
 
-    # Smart Router
+    # Smart Router (normally resolved earlier by run_manager, which also records the model)
     if agent in ["auto", "smart", "router"]:
-        p_lower = prompt.lower()
-        if p_lower.startswith(("ls", "cat", "ps", "df", "free", "docker", "systemctl", "git", "cd ", "mkdir", "rm ", "cp ", "mv ", "apt", "pip", "node")):
-            agent = "bash"
-        elif "claude" in p_lower:
-            agent = "claude"
-        elif "codex" in p_lower:
-            agent = "codex"
-        else:
-            agent = "antigravity"
+        from services import auto_router
+        r = auto_router.route(prompt)
+        agent, model = r.agent, model or r.model
 
     # 1. Fetch previous session history for multi-turn conversational context
     session_history_context = ""
@@ -432,11 +469,30 @@ async def stream_agent(agent_name: str, prompt: str, workspace: str = None, mode
     except Exception:
         pass
 
+    # 3. Context enrichment from live location / travel state
+    location_context = ""
+    try:
+        loc_path = "/root/workspace/scripts/CURRENT_LOCATION.json"
+        if os.path.exists(loc_path):
+            with open(loc_path) as lf:
+                loc_data = json.load(lf)
+            location_context = (
+                f"[Live User Location & Travel Context]:\n"
+                f"- Place: {loc_data.get('label', 'Current Location')} ({loc_data.get('address', '')})\n"
+                f"- Coordinates: {loc_data.get('latitude')}, {loc_data.get('longitude')} | Timezone: {loc_data.get('timezone')}\n"
+                f"- Environmental Tools: Read /root/workspace/scripts/CURRENT_LOCATION.json or run `/usr/local/bin/location` (e.g. `location weather`, `location nearby [cat] [n]`, `location distance`)\n"
+                f"- Status / Travel Note: {loc_data.get('note', '')}"
+            )
+    except Exception:
+        pass
+
     prompt_components = []
     if session_history_context:
         prompt_components.append(session_history_context)
     if memory_context:
         prompt_components.append(memory_context)
+    if location_context:
+        prompt_components.append(location_context)
     prompt_components.append(f"Current User Request:\n{prompt}")
 
     enriched_prompt = "\n\n".join(prompt_components)
@@ -465,7 +521,7 @@ async def stream_agent(agent_name: str, prompt: str, workspace: str = None, mode
         yield f"🟣 *[Claude Code Agent · Full VM Root Access · {cwd}]*\n\n"
         cmd = [
             "/usr/bin/claude",
-            "-p", enriched_prompt,
+            "-p", f"[Reply formatting guide]\n{FORMAT_GUIDE}\n\n{enriched_prompt}",
             "--output-format", "stream-json",
             "--verbose",
             "--allowed-tools", "Bash,Edit,Read,Write,Glob,Grep,mcp__pet-memory__*,mcp__vault__*,mcp__icloud__*",
@@ -492,9 +548,43 @@ async def stream_agent(agent_name: str, prompt: str, workspace: str = None, mode
             yield chunk
         return
 
-    # 3. OPENAI CODEX
-    elif agent in ["codex", "openai-codex"]:
-        yield f"🟢 *[OpenAI Codex Agent · Full VM Sandbox Bypass · {cwd}]*\n\n"
+    # 3. OPENAI CODEX & REGINA
+    elif agent in ["codex", "openai-codex", "regina"]:
+        is_regina = agent == "regina"
+        if is_regina and model and "claude" in model.lower():
+            model_display = "Claude Haiku 5.5" if "haiku" in model.lower() else "Claude Sonnet 5.5" if "sonnet" in model.lower() else model
+            yield f"🌸 *[Regina · {model_display} · {cwd}]*\n\n"
+            system_prompt = "Your name is Regina. You are the user's assistant powered by Anthropic Claude.\n\n" + GLOBAL_SYSTEM_PROMPT
+            cmd = [
+                "/usr/bin/claude",
+                "-p", f"[Reply formatting guide]\n{FORMAT_GUIDE}\n\n{enriched_prompt}",
+                "--output-format", "stream-json",
+                "--verbose",
+                "--allowed-tools", "Bash,Edit,Read,Write,Glob,Grep,mcp__pet-memory__*,mcp__vault__*,mcp__icloud__*",
+                "--append-system-prompt", system_prompt,
+                "--add-dir", "/",
+                "--add-dir", "/root/workspace",
+                "--add-dir", "/root/Documents/Personal",
+                "--model", model
+            ]
+            env = os.environ.copy()
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=cwd,
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                limit=100 * 1024 * 1024,
+                start_new_session=True
+            )
+            async for chunk in _pump_claude_stream_json(proc, "Regina", "🌸"):
+                yield chunk
+            return
+
+        if is_regina:
+            yield f"🌸 *[Regina · Microsoft Foundry · {cwd}]*\n\n"
+        else:
+            yield f"🟢 *[OpenAI Codex Agent · Full VM Sandbox Bypass · {cwd}]*\n\n"
         cmd = [
             "/usr/local/bin/codex",
             "exec",
@@ -506,11 +596,30 @@ async def stream_agent(agent_name: str, prompt: str, workspace: str = None, mode
             "--add-dir", "/root/workspace",
             "--add-dir", "/root/Documents/Personal"
         ]
-        if model:
-            cmd += ["--model", model]
-        cmd.append(enriched_prompt)
-        
         env = os.environ.copy()
+        if is_regina:
+            from services.vault_service import get_credential
+            credential = await asyncio.to_thread(get_credential, "tentamus-foundry-playground")
+            if not credential or not credential.get("api_token"):
+                raise RuntimeError("Regina's Foundry credential is missing from the vault")
+            env["REGINA_FOUNDRY_API_KEY"] = credential["api_token"]
+            provider = {
+                "name": "Microsoft Foundry", "base_url": credential["url"].rstrip("/"),
+                "env_key": "REGINA_FOUNDRY_API_KEY", "wire_api": "responses",
+            }
+            selected_model = model or "gpt-5.4-mini-agent"
+            if selected_model.startswith("kimi") or "deepseek" in selected_model:
+                env["CODEX_HOME"] = "/root/.codex-kimi"
+            cmd += ["-c", 'model_provider="regina_foundry"',
+                    "-c", "model_providers.regina_foundry=" +
+                    "{" + ", ".join(k + "=" + json.dumps(v) for k, v in provider.items()) + "}"]
+            if not (selected_model.startswith("kimi") or "deepseek" in selected_model):
+                cmd += ["-c", 'model_reasoning_effort="low"']
+            cmd += ["--model", selected_model]
+            enriched_prompt = "Your name is Regina. You are the user's assistant powered by Microsoft Foundry.\n\n" + enriched_prompt
+        elif model:
+            cmd += ["--model", model]
+        cmd.append(f"[Reply formatting guide]\n{FORMAT_GUIDE}\n\n{enriched_prompt}")
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=cwd,
@@ -521,7 +630,7 @@ async def stream_agent(agent_name: str, prompt: str, workspace: str = None, mode
             start_new_session=True
         )
 
-        async for chunk in _pump_codex_json(proc):
+        async for chunk in _pump_codex_json(proc, "Regina" if is_regina else "Codex", "🌸" if is_regina else "🟢"):
             yield chunk
         return
 
@@ -532,7 +641,7 @@ async def stream_agent(agent_name: str, prompt: str, workspace: str = None, mode
         # agy CLI with stream-json output, full filesystem access, root permissions, and selected model
         cmd = [
             "/usr/local/bin/agy",
-            "-p", enriched_prompt,
+            "-p", f"[Reply formatting guide]\n{FORMAT_GUIDE}\n\n{enriched_prompt}",
             "--output-format", "stream-json",
             "--dangerously-skip-permissions",
             "--add-dir", "/",

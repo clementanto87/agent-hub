@@ -1,3 +1,12 @@
+# Secrets live in /root/agent-hub/.env (never in code); load them however the server is launched.
+import os as _os
+_envf = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".env")
+if _os.path.exists(_envf):
+    for _ln in open(_envf):
+        _k, _, _v = _ln.strip().partition("=")
+        if _k and _v and not _k.startswith("#"):
+            _os.environ.setdefault(_k.strip(), _v.strip())
+
 import asyncio
 import os
 import io
@@ -13,14 +22,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from services.agent_runner import stream_agent
 from services.session_store import (
     init_db, list_sessions, get_session, create_session,
-    add_message, update_session_title, delete_session, get_usage_metrics
+    add_message, update_session_title, delete_session, get_usage_metrics,
+    get_active_session, set_active_session, get_message_count
 )
 from services.system_monitor import get_system_stats, kill_process
 from services.terminal_session import TerminalManager
 from services.tunnel_manager import start_tunnel, get_tunnel_url, stop_tunnel
 from services.run_manager import run_manager, RunActive
 from services.transcriber import transcribe_audio, warm_up
-from services import tts, model_catalog
+from services import tts, model_catalog, fast_reply, live_voice, voice_summary, stt_stream
+from services.session_store import get_session
 from services.memory_service import recall_memory, save_memory, get_memory_status
 
 app = FastAPI(title="AgentHub Mobile Cloud Hub")
@@ -49,6 +60,7 @@ async def startup_event():
     init_db()
     asyncio.get_running_loop().run_in_executor(None, warm_up)
     asyncio.get_running_loop().run_in_executor(None, tts.warm_up)
+    asyncio.create_task(fast_reply.warm_up())
     asyncio.get_running_loop().run_in_executor(None, model_catalog.all_catalogs)
 
 # Serve static files and uploaded media
@@ -113,13 +125,118 @@ async def chat_endpoint(request: Request):
     user_tokens = max(1, int(len(prompt) / 3.8))
     add_message(session_id, "user", prompt, agent_name, model, tokens=user_tokens)
 
-    # The run belongs to the server: it keeps going if this connection drops.
-    try:
-        run = run_manager.start(session_id, agent_name, prompt, workspace, voice=voice, model=model)
-    except RunActive:
-        return JSONResponse({"error": "A reply is already running in this conversation"}, status_code=409)
+    fast_ok = (
+        fast_reply.ENABLED
+        and agent_name.lower() not in ("bash", "shell", "terminal", "regina")
+        and not (model and model.strip())
+    )
+    if fast_ok and not voice and agent_name.lower() in ("auto", "smart", "router"):
+        # Auto + text: the small fast model has no project context and answers workspace questions
+        # generically. Only let it handle greetings / short generic questions; the rest goes to a real agent.
+        from services import auto_router
+        ctx = re.search(r"\b(this|our|my|the)\s+(project|repo|repository|codebase|code|app|service|server|vm|workspace|branch|file|folder|pipeline|queue|dlq|deploy(ment)?|build|logs?)\b|\b(dlq|ci|cd|pr|commit|branch|azure|apim|docker|git)\b", prompt, re.I)
+        fast_ok = auto_router.route(prompt).tier == "light" and not ctx and len(prompt) < 200
 
-    return StreamingResponse(run.follow(), media_type="text/plain", headers={"X-Session-ID": session_id})
+    # The run belongs to the server: it keeps going if this connection drops.
+    def start_run():
+        return run_manager.start(session_id, agent_name, prompt, workspace, voice=voice, model=model)
+
+    if not fast_ok:
+        try:
+            run = start_run()
+        except RunActive:
+            return JSONResponse({"error": "A reply is already running in this conversation"}, status_code=409)
+        return StreamingResponse(run.follow(), media_type="text/plain", headers={"X-Session-ID": session_id})
+
+    async def fast_or_agent():
+        """Fast: let a small, inexpensive model answer plain conversation (first word in ~0.5 s) and hand
+        anything that needs the machine to the real agent, all inside one response stream."""
+        reply = ""
+        handoff = False
+        ack = ""
+        try:
+            sess = await asyncio.to_thread(get_session, session_id)
+            history = (sess or {}).get("messages", [])[:-1]          # the prompt itself was just stored
+            import importlib
+            importlib.reload(fast_reply)
+            async for piece in fast_reply.stream_reply(prompt, history, is_voice=voice):
+                if piece == fast_reply.HANDOFF_TOKEN:
+                    handoff = True
+                    continue
+                if handoff:
+                    ack += piece                                    # Short acknowledgement while agent boots
+                else:
+                    reply += piece
+                yield piece.encode("utf-8")
+            if not handoff:
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"fast reply failed, using agent: {e}")
+        finally:
+            if reply.strip() and not handoff:
+                add_message(session_id, "assistant", reply, agent_name, fast_reply.PRIMARY_MODEL, tokens=max(1, int(len(reply) / 3.8)))
+        if reply.strip() and not handoff:
+            return                                                  # answered conversational query
+        if handoff and not ack.strip() and voice:
+            ack = "Okay, let me check that and get back to you."
+            yield ack.encode("utf-8")
+        if ack.strip():
+            yield b"\n\n"
+        try:
+            run = start_run()
+        except RunActive:
+            yield b"\n[A reply is already running in this conversation]"
+            return
+        first = bool(ack.strip())
+        if first:
+            run.prefix = ack.strip() + "\n\n"             # stored with the agent's reply so history matches what was heard
+        async for chunk in run.follow():
+            if first:
+                first = False
+                # Strip duplicate agent banner if ack was already sent
+                chunk = re.sub(rb"^\s*(?:\xf0\x9f\x9a\x80|\xf0\x9f\x9f\xa3|\xf0\x9f\x9f\xa2)\s*\*\[[^\]\n]*\]\*[ \t]*\n*", b"", chunk)
+                if not chunk:
+                    continue
+            yield chunk
+
+    return StreamingResponse(fast_or_agent(), media_type="text/plain", headers={"X-Session-ID": session_id})
+
+@app.post("/api/voice/summary")
+async def voice_summary_endpoint(request: Request):
+    """A one-line spoken summary for a long reply (the rest stays on screen)."""
+    data = await request.json()
+    text = (data.get("text") or "").strip()
+    if not text:
+        return {"summary": ""}
+    try:
+        return {"summary": await voice_summary.summarize(text, data.get("spoken") or "")}
+    except Exception as e:
+        print(f"voice summary failed: {e}")
+        return {"summary": ""}
+
+@app.websocket("/ws/stt")
+async def ws_stt(ws: WebSocket):
+    await ws.accept()
+    if not stt_stream.ENABLED:
+        await ws.send_text('{"type":"error"}')
+        await ws.close()
+        return
+    await stt_stream.handle(ws)
+
+@app.get("/api/live/status")
+async def live_status():
+    return {"enabled": live_voice.ENABLED, "model": live_voice.MODEL, "voices": live_voice.AGENT_VOICES}
+
+@app.websocket("/ws/live")
+async def ws_live(ws: WebSocket):
+    await ws.accept()
+    if not live_voice.ENABLED:
+        await ws.send_text('{"type":"error","text":"Live voice is not configured."}')
+        await ws.close()
+        return
+    await live_voice.handle(ws)
 
 @app.get("/api/models")
 async def list_models(refresh: bool = False):
@@ -177,6 +294,23 @@ async def remove_session(session_id: str):
     delete_session(session_id)
     return {"success": True}
 
+@app.get("/api/sessions/{session_id}/message-count")
+async def session_message_count(session_id: str):
+    return {"session_id": session_id, "count": get_message_count(session_id)}
+
+@app.get("/api/active-session")
+async def get_active():
+    sid = get_active_session()
+    return {"session_id": sid}
+
+@app.put("/api/active-session")
+async def put_active(request: Request):
+    data = await request.json()
+    sid = data.get("session_id", "")
+    if sid:
+        set_active_session(sid)
+    return {"session_id": sid}
+
 @app.get("/api/system")
 async def system_stats():
     return get_system_stats()
@@ -217,7 +351,7 @@ async def git_changes(workspace: str = None):
 
         st = subprocess.run(["git", "status", "--porcelain"], cwd=ws, capture_output=True, text=True, timeout=5)
         diff_st = subprocess.run(["git", "diff", "--numstat", "HEAD"], cwd=ws, capture_output=True, text=True, timeout=5)
-        
+
         numstats = {}
         if diff_st.returncode == 0:
             for line in diff_st.stdout.splitlines():
@@ -332,7 +466,7 @@ async def browse_dir(path: str = "/root", show_hidden: bool = False):
     """List sub-folders and files of `path` so the app can browse anywhere on the VM."""
     raw_path = (path or "/root").strip().strip('"').strip("'")
     target = os.path.realpath(os.path.expanduser(raw_path or "/"))
-    
+
     # If the target path doesn't exist or isn't a directory, walk up until we find an existing directory
     while target and target != "/" and not os.path.isdir(target):
         target = os.path.dirname(target)
@@ -604,11 +738,20 @@ async def get_qr_code(url: str = None):
     qr.add_data(target_url)
     qr.make(fit=True)
     img = qr.make_image(fill_color="#0f172a", back_color="#ffffff")
-    
+
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
     return Response(content=buf.getvalue(), media_type="image/png")
+
+@app.post("/api/upload-folder")
+async def upload_folder_endpoint(files: list[UploadFile] = File(...)):
+    """Import a device folder as an isolated VM workspace, retaining relative paths."""
+    from services.folder_import import import_folder
+    try:
+        return await import_folder(files)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
 @app.post("/api/upload")
 async def upload_files_endpoint(files: list[UploadFile] = File(...)):
@@ -621,17 +764,17 @@ async def upload_files_endpoint(files: list[UploadFile] = File(...)):
         unique_prefix = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
         saved_name = f"{unique_prefix}_{clean_name}"
         saved_path = os.path.join(UPLOADS_DIR, saved_name)
-        
+
         content = await file.read()
         with open(saved_path, "wb") as f:
             f.write(content)
-        
+
         size = len(content)
         ext = os.path.splitext(clean_name)[1].lstrip(".").lower()
         is_image = ext in {"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"}
         is_audio = ext in {"mp3", "wav", "ogg", "m4a", "aac", "webm"}
         is_video = ext in {"mp4", "mov", "avi", "mkv", "webm"}
-        
+
         uploaded.append({
             "name": file.filename,
             "saved_name": saved_name,
@@ -653,33 +796,33 @@ async def upload_from_url_endpoint(request: Request):
     url = (data.get("url") or "").strip()
     if not url or not (url.startswith("http://") or url.startswith("https://")):
         return JSONResponse({"error": "Invalid URL provided"}, status_code=400)
-    
+
     try:
         import urllib.parse
         import urllib.request
-        
+
         parsed = urllib.parse.urlparse(url)
         url_filename = os.path.basename(parsed.path) or "downloaded_media"
         clean_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', url_filename)
         if "." not in clean_name:
             clean_name += ".bin"
-            
+
         unique_prefix = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
         saved_name = f"{unique_prefix}_{clean_name}"
         saved_path = os.path.join(UPLOADS_DIR, saved_name)
-        
+
         def _fetch():
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AgentHub/2.0'})
             with urllib.request.urlopen(req, timeout=20) as resp, open(saved_path, 'wb') as out_f:
                 out_f.write(resp.read(50 * 1024 * 1024)) # up to 50 MB
-        
+
         await asyncio.to_thread(_fetch)
-        
+
         stat = os.stat(saved_path)
         size = stat.st_size
         ext = os.path.splitext(clean_name)[1].lstrip(".").lower()
         is_image = ext in {"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"}
-        
+
         return {
             "file": {
                 "name": clean_name,
@@ -705,7 +848,7 @@ async def transcribe_audio_endpoint(request: Request, file: UploadFile = File(No
         else:
             content = await request.body()
             mime_type = request.headers.get("content-type", "audio/webm")
-        
+
         if not content:
             return JSONResponse({"error": "No audio content received"}, status_code=400)
 
@@ -714,6 +857,10 @@ async def transcribe_audio_endpoint(request: Request, file: UploadFile = File(No
         return {"transcript": text, "agent": chosen_agent}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/api/tts/voices")
+async def tts_voices_endpoint():
+    return {"voices": tts.get_voice_catalog(), "default": tts.DEFAULT_VOICE, "agent_voices": tts.AGENT_VOICES}
 
 @app.post("/api/tts")
 async def tts_endpoint(request: Request):
@@ -727,7 +874,9 @@ async def tts_endpoint(request: Request):
         audio = await asyncio.to_thread(tts.synthesize, text, voice)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
-    return Response(content=audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+    mime = "audio/wav" if audio.startswith(b"RIFF") else "audio/mpeg"
+    return Response(content=audio, media_type=mime, headers={"Cache-Control": "no-store"})
 
 @app.post("/api/tunnel/start")
 async def start_tunnel_endpoint(background_tasks: BackgroundTasks):
@@ -781,6 +930,118 @@ async def memory_save_endpoint(request: Request):
         return JSONResponse({"error": "Content required"}, status_code=400)
     res = await asyncio.to_thread(save_memory, content, metadata)
     return res
+
+from services import mail_connector
+
+_CONNECTOR_LABELS = {"gmail": "Gmail", "m365": "Outlook (Microsoft 365)"}
+
+def _connector_test(name: str) -> dict:
+    """Live check: auth status plus a 1-message search so permission errors (e.g. 403) surface."""
+    info = dict(mail_connector.PROVIDERS[name].status())
+    if info.get("status") == "ready":
+        res = mail_connector.search("", 1, name)
+        err = next((m["error"] for m in res if isinstance(m, dict) and m.get("error")), None)
+        if err:
+            info.update(status="error", error=err)
+    return {"id": name, "label": _CONNECTOR_LABELS.get(name, name), **info}
+
+@app.get("/api/connectors")
+async def list_connectors_endpoint():
+    items = await asyncio.gather(*(asyncio.to_thread(_connector_test, n) for n in mail_connector.PROVIDERS))
+    return {"connectors": items}
+
+@app.post("/api/connectors/{name}/test")
+async def test_connector_endpoint(name: str):
+    if name not in mail_connector.PROVIDERS:
+        return JSONResponse({"error": "Unknown connector"}, status_code=404)
+    return await asyncio.to_thread(_connector_test, name)
+
+@app.get("/api/connectors/{name}/messages")
+async def connector_messages_endpoint(name: str, q: str = "", limit: int = 8):
+    if name not in mail_connector.PROVIDERS:
+        return JSONResponse({"error": "Unknown connector"}, status_code=404)
+    msgs = await asyncio.to_thread(mail_connector.search, q, max(1, min(limit, 25)), name)
+    return {"messages": msgs}
+
+# Location & Travel Sync Endpoints
+@app.get("/api/location")
+async def get_current_location_endpoint():
+    loc_file = "/root/workspace/scripts/CURRENT_LOCATION.json"
+    if os.path.exists(loc_file):
+        try:
+            with open(loc_file, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+    return JSONResponse({"error": "Location file not found"}, status_code=404)
+
+@app.post("/api/location/sync")
+async def sync_browser_location_endpoint(request: Request):
+    try:
+        data = await request.json()
+        lat = data.get("latitude")
+        lon = data.get("longitude")
+        acc = data.get("accuracy")
+        force = data.get("force", False)
+        if lat is None or lon is None:
+            return JSONResponse({"error": "Missing latitude or longitude"}, status_code=400)
+
+        import sys
+        if "/root/workspace/scripts" not in sys.path:
+            sys.path.insert(0, "/root/workspace/scripts")
+        import locationctl
+
+        loc_file = "/root/workspace/scripts/CURRENT_LOCATION.json"
+        should_update = True
+        curr = None
+        if os.path.exists(loc_file) and not force:
+            try:
+                curr = locationctl.load(loc_file)
+                dist_km = locationctl.haversine(curr["latitude"], curr["longitude"], float(lat), float(lon))
+                # If moved less than 150m and already synced recently from browser GPS, avoid hammering Nominatim
+                if dist_km < 0.15 and "browser GPS" in curr.get("source", ""):
+                    should_update = False
+                    return {"status": "unchanged", "distance_km": round(dist_km, 3), "location": curr}
+            except Exception:
+                pass
+
+        if should_update:
+            loc = await asyncio.to_thread(locationctl.reverse_geocode, float(lat), float(lon), acc)
+            locationctl.save_current(loc)
+            return {"status": "updated", "location": loc}
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/api/location/reset-home")
+async def reset_location_home_endpoint():
+    try:
+        import sys
+        if "/root/workspace/scripts" not in sys.path:
+            sys.path.insert(0, "/root/workspace/scripts")
+        import locationctl
+        h = locationctl.load(locationctl.HOME)
+        locationctl.save_current(h)
+        return {"status": "ok", "location": h}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/api/location/set-place")
+async def set_location_place_endpoint(request: Request):
+    try:
+        data = await request.json()
+        place = data.get("place", "").strip()
+        if not place:
+            return JSONResponse({"error": "Place query required"}, status_code=400)
+        import sys
+        if "/root/workspace/scripts" not in sys.path:
+            sys.path.insert(0, "/root/workspace/scripts")
+        import locationctl
+        loc = await asyncio.to_thread(locationctl.geocode, place)
+        locationctl.save_current(loc)
+        return {"status": "ok", "location": loc}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 from services import vault_service
 
@@ -929,7 +1190,7 @@ async def auth_google_page(request: Request):
     url = google_auth_service.get_auth_url(redirect_uri="http://localhost")
     token = google_auth_service.load_access_token()
     is_auth = bool(token)
-    
+
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -957,9 +1218,9 @@ async def auth_google_page(request: Request):
         <div class="status-badge {'status-ok' if is_auth else 'status-warn'}">
           {'✅ Gmail Access Authenticated' if is_auth else '⚠️ Authorization Required'}
         </div>
-        
+
         <p>Authorize Gmail read, search, and send permissions so all agents (Claude, Codex, Antigravity) can read and summarize your emails directly.</p>
-        
+
         <a href="{url}" target="_blank" class="btn">1. Sign In with Google</a>
 
         <div class="box">

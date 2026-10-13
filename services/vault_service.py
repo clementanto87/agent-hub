@@ -7,7 +7,7 @@ import sqlite3
 import hashlib
 import asyncio
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import pyotp
@@ -196,7 +196,8 @@ def list_credentials() -> List[Dict[str, Any]]:
             "has_password": bool(r["has_password"]),
             "has_totp": bool(r["has_totp"]),
             "has_token": bool(r["has_token"]),
-            "updated_at": r["updated_at"]
+            "updated_at": r["updated_at"],
+            "updated_at_utc": datetime.fromtimestamp(r["updated_at"], timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         })
     return items
 

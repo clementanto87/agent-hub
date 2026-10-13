@@ -268,6 +268,20 @@ def _send_via_m365(
             "error": resp.text
         }
 
+def _send_via_outlook(to_list, subject, body, body_html, att_list, cc_list, bcc_list, dry_run):
+    """Send from regina_clement@outlook.com via the device-code Graph token (outlook_service)."""
+    if att_list or bcc_list:
+        return {"success": False, "provider": "outlook", "error": "Attachments and BCC are not supported by the outlook provider yet."}
+    if dry_run:
+        return {"success": True, "provider": "outlook", "dry_run": True, "to": to_list, "subject": subject}
+    from services import outlook_service
+    try:
+        outlook_service.send_message(to_list, subject, body_html or body, html=bool(body_html), cc=cc_list or None)
+    except Exception as e:
+        return {"success": False, "provider": "outlook", "error": str(e)}
+    return {"success": True, "provider": "outlook", "to": to_list, "subject": subject}
+
+
 def send_email(
     to: Union[str, List[str]],
     subject: str,
@@ -326,7 +340,9 @@ def send_email(
             att_list = list(attachments)
 
     prov = provider.lower().strip()
-    if prov in ("m365", "microsoft", "graph", "outlook"):
+    if prov == "outlook":
+        return _send_via_outlook(to_list, subject, body, body_html, att_list, cc_list, bcc_list, dry_run)
+    if prov in ("m365", "microsoft", "graph"):
         return _send_via_m365(to_list, subject, body, body_html, att_list, cc_list, bcc_list, dry_run)
     
     # Default to Gmail / Google Workspace API

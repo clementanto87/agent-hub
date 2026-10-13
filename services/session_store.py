@@ -35,6 +35,12 @@ def init_db():
         cursor.execute("ALTER TABLE messages ADD COLUMN model TEXT")
     if "tokens" not in cols:
         cursor.execute("ALTER TABLE messages ADD COLUMN tokens INTEGER")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS kv (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -130,6 +136,32 @@ def delete_session(session_id: str):
     cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
     conn.commit()
     conn.close()
+
+def get_active_session() -> str | None:
+    init_db()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM kv WHERE key = 'active_session'")
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def set_active_session(session_id: str):
+    init_db()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO kv (key, value) VALUES ('active_session', ?)", (session_id,))
+    conn.commit()
+    conn.close()
+
+def get_message_count(session_id: str) -> int:
+    init_db()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT count(*) FROM messages WHERE session_id = ?", (session_id,))
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
 
 def get_usage_metrics(five_hour_budget: int = 200000, weekly_budget: int = 1500000, agent: str = None) -> dict:
     """

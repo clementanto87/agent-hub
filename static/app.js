@@ -10,13 +10,14 @@ const AGENTS = {
   antigravity: { name: 'Antigravity', full: 'Google Antigravity', desc: 'Autonomous agent with tools and filesystem access', color: 'var(--c-antigravity)', icon: 'a-antigravity' },
   claude:      { name: 'Claude Code', full: 'Anthropic Claude Code', desc: 'Claude Code CLI with full tool execution', color: 'var(--c-claude)', icon: 'a-claude' },
   codex:       { name: 'Codex', full: 'OpenAI Codex', desc: 'OpenAI coding agent', color: 'var(--c-codex)', icon: 'a-codex' },
+  regina:      { name: 'Regina', full: 'Regina', desc: 'Microsoft Foundry assistant with VM tools', color: 'var(--c-regina)', icon: 'a-regina' },
   bash:        { name: 'Shell', full: 'Linux Shell', desc: 'Run a command directly in bash', color: 'var(--c-bash)', icon: 'a-bash' },
   auto:        { name: 'Auto', full: 'Smart Router', desc: 'Picks the best agent for each message', color: 'var(--c-auto)', icon: 'a-auto' },
 };
 
 // The backend prefixes each reply with a tag line naming the agent that ran.
-const AGENT_TAGS = { '🚀': 'antigravity', '🟣': 'claude', '🟢': 'codex', '⚙️': 'bash' };
-const TAG_RE = /^\s*(🚀|🟣|🟢|⚙️)\s*\*\[[^\]\n]*\]\*[ \t]*\n*/u;
+const AGENT_TAGS = { '🚀': 'antigravity', '🟣': 'claude', '🟢': 'codex', '⚙️': 'bash', '🌸': 'regina' };
+const TAG_RE = /^\s*(🚀|🟣|🟢|⚙️|🌸)\s*\*\[[^\]\n]*\]\*[ \t]*\n*/u;
 
 const SUGGESTIONS = [
   { icon: 'i-sparkle', title: 'Shared memory',   sub: 'Search pet-memory facts',        prompt: 'Search shared memory for recent facts and family records', cmd: 'python3 -c "import sys; sys.path.insert(0, \'/root/workspace/pet/infra/memory\'); import server; print(server.memory_recall(\'\', 5))"' },
@@ -58,6 +59,7 @@ const state = {
   attachments: [],
   groupBy: store.get('groupBy', 'folder'),   // chat lists: 'folder' or 'date'
   expandedWs: new Set(),
+  collapsedRailWs: new Set(store.get('collapsedRailWs', [])),
   tunnel: { active: false, url: '' },
   prefs: {
     enter: store.get('pref.enter', window.matchMedia('(pointer: fine)').matches),
@@ -553,7 +555,7 @@ function performSheetBack() {
 
 // Unwinds the UI one layer at a time, like a system Back button.
 function goBack() {
-  if ($('#rail')?.classList.contains('open')) { closeNav(); return true; }
+  if (!navDesktop.matches && $('#rail')?.classList.contains('open')) { closeNav(); return true; }
   if (performSheetBack()) return true;
   if (typeof vc !== 'undefined' && vc.open) { voiceClose(); return true; }
   if (chromeMode() === 'thread') { newChat({ focus: false }); return true; }
@@ -638,8 +640,8 @@ function goBack() {
   document.addEventListener('touchcancel', finish, { passive: true });
 })();
 
-const MODEL_AGENTS = ['antigravity', 'claude', 'codex'];
-const MODEL_SOURCE = { antigravity: 'Antigravity', claude: 'Anthropic', codex: 'Codex' };
+const MODEL_AGENTS = ['antigravity', 'claude', 'codex', 'regina'];
+const MODEL_SOURCE = { antigravity: 'Antigravity', claude: 'Anthropic', codex: 'Codex', regina: 'Microsoft Foundry' };
 
 function currentModel(agent = state.agent) {
   return state.modelSel[agent] || null;
@@ -704,11 +706,52 @@ function agentSub(k) {
   return m ? modelName(k, m) : 'Default model';
 }
 
+// How hard a model hits the token budget (1 light … 5 very heavy) and what it's
+// good for. Catalogs are live, so this keys off family names, not exact ids;
+// the reasoning-effort suffix (low/high) nudges the weight down/up.
+const MODEL_FAMILIES = [
+  [/haiku/, 1, 'Quick answers, small edits, high-volume chores'],
+  [/sonnet/, 3, 'Everyday coding and analysis — the best balance'],
+  [/opus/, 4, 'Deep reasoning, big refactors, long agent runs'],
+  [/fable/, 5, 'Frontier reasoning for the hardest, longest work'],
+  [/flash-?lite/, 1, 'Fast, cheap lookups and simple steps'],
+  [/flash/, 2, 'Fast everyday work with light reasoning'],
+  [/gemini.*pro/, 4, 'Complex multi-step tasks and large codebases'],
+  [/gpt-oss/, 2, 'Open-weight model for routine tasks'],
+  [/luna|\bmini\b|\bnano\b/, 1, 'Fast and affordable — easy, well-defined tasks'],
+  [/terra/, 2, 'Balanced — straightforward coding and edits'],
+  [/sol/, 3, 'Workhorse for coding and everyday work'],
+  [/astra|-pro\b|max/, 5, 'Frontier intelligence for the most demanding work'],
+  [/kimi.*k2\.?7|kimi.*code/, 3, 'MoonshotAI coding model — code generation and analysis'],
+  [/kimi.*k2\.?6/, 4, 'MoonshotAI advanced reasoning model'],
+  [/kimi.*k2\.?5/, 3, 'MoonshotAI reasoning model — balanced performance'],
+];
+const WEIGHT_LABEL = ['', 'Light', 'Lean', 'Moderate', 'Heavy', 'Very heavy'];
+
+function modelProfile(m) {
+  const key = `${m.id} ${m.name}`.toLowerCase();
+  const fam = MODEL_FAMILIES.find(([re]) => re.test(key));
+  if (!fam) return m.description ? { weight: 0, use: m.description } : null;
+  let weight = fam[1];
+  if (/\b(high|xhigh)\b|-high\b|thinking/.test(key)) weight++;
+  if (/\blow\b|-low\b/.test(key)) weight--;
+  weight = Math.max(1, Math.min(5, weight));
+  return { weight, use: m.description || fam[2] };
+}
+
+function tokenMeter(w) {
+  if (!w) return '';
+  const bars = [1, 2, 3, 4, 5].map((i) => `<i class="${i <= w ? 'on' : ''}"></i>`).join('');
+  return `<span class="tok-meter w${w}" title="Token use: ${WEIGHT_LABEL[w]}" aria-label="Token use: ${WEIGHT_LABEL[w]}"><span class="tok-bars">${bars}</span><span class="tok-label">${WEIGHT_LABEL[w]}</span></span>`;
+}
+
 function modelOpt(agent, m, sel) {
   const on = (m ? m.id : null) === (sel || null);
+  const p = m && modelProfile(m);
   return `<button class="model-opt ${on ? 'selected' : ''}" role="radio" aria-checked="${on}" data-pick-model="${m ? esc(m.id) : ''}">
-    <span class="model-name">${esc(m ? (agent === 'claude' ? m.name.replace(/^Claude\s+/, '') : m.name) : 'Default')}</span>
-    <span class="model-hint">${esc(m ? m.id : showAllModels ? defaultModelSub(agent, state.models[agent]) : 'CLI setting')}</span></button>`;
+    <span class="model-top"><span class="model-name">${esc(m ? (agent === 'claude' ? m.name.replace(/^Claude\s+/, '') : m.name) : 'Default')}</span>${p ? tokenMeter(p.weight) : ''}</span>
+    <span class="model-hint">${esc(m ? m.id : showAllModels ? defaultModelSub(agent, state.models[agent]) : 'CLI setting')}</span>
+    ${p && p.use ? `<span class="model-use">${esc(p.use)}</span>` : ''}</button>`;
 }
 
 function openAgentSheet() {
@@ -846,6 +889,7 @@ async function attachExternalUrl(url) {
   }
 }
 
+
 function openAttachSheet() {
   openSheet(`
     <div class="browser-header">
@@ -867,11 +911,10 @@ function openAttachSheet() {
       <button class="opt" data-action="pick-device-file" style="cursor:pointer;">
         <div class="opt-ico" style="background:rgba(99, 102, 241, 0.16); color:#818cf8; font-size:20px;">📱</div>
         <div class="opt-main">
-          <div class="opt-title">Photo Library & Files</div>
-          <div class="opt-sub">Photos, screenshots, documents, PDFs, or files from device</div>
+          <div class="opt-title">Choose files from this device</div>
+          <div class="opt-sub">Photo library, documents, or files on your current computer or phone</div>
         </div>
       </button>
-
       <!-- Option 3: From Web / URL -->
       <div class="opt" style="flex-direction:column; align-items:stretch; gap:8px;">
         <div style="display:flex; align-items:center; gap:12px;">
@@ -927,23 +970,35 @@ async function openFileSheet(filePath) {
 
     openSheet(`
       <div class="fv-head">
-        <button class="icon-btn" data-browse-to="${esc(parent)}" aria-label="Back">${icon('i-back')}</button>
+        <button class="icon-btn" data-browse-to="${esc(parent)}" aria-label="Back" title="Back to files">${icon('i-back')}</button>
         <div class="fv-info">
           <span class="fv-name">${esc(data.name)}</span>
           <span class="fv-meta">${esc(data.size_fmt)}${lineCount ? ` · ${lineCount} lines` : ''} · ${esc(data.ext || 'file')}</span>
         </div>
-        ${data.is_text ? `<button class="icon-btn" data-copy-file-content aria-label="Copy contents">${icon('i-copy')}</button>` : ''}
+        ${data.is_text ? `<button class="icon-btn" data-copy-file-content aria-label="Copy contents" title="Copy text">${icon('i-copy')}</button>` : ''}
+        <button class="icon-btn" data-sheet="cancel" aria-label="Close" title="Close viewer">${icon('i-x')}</button>
       </div>
       <div class="fv-path">${esc(data.path)}</div>
 
-      ${isPdf ? `<div class="fv-pdf"><iframe src="${rawUrl}" title="${esc(data.name)}" referrerpolicy="no-referrer"></iframe></div>` :
-        isImage ? `<div class="fv-image"><img src="${rawUrl}" alt="${esc(data.name)}"></div>` :
+      ${isPdf ? `
+        <div class="fv-pdf">
+          <div class="fv-pdf-float-bar">
+            <button type="button" data-browse-to="${esc(parent)}">${icon('i-back', 'xs')} Back</button>
+            <a href="${rawUrl}" download="${esc(data.name)}">${icon('i-download', 'xs')} Download</a>
+            <button type="button" data-sheet="cancel">${icon('i-x', 'xs')} Close</button>
+          </div>
+          <iframe src="${rawUrl}#toolbar=0" title="${esc(data.name)}" referrerpolicy="no-referrer"></iframe>
+        </div>` :
+        isImage ? `
+        <div class="fv-image">
+          <img src="${rawUrl}" alt="${esc(data.name)}">
+        </div>` :
         data.is_text && data.content !== null ? `<pre class="fv-code">${numbered}</pre>` :
         `<div class="fv-binary">${icon('i-box')}<span>${esc(data.size_fmt)} · can't preview this type</span></div>`}
 
       <div class="fv-actions">
         ${data.is_text ? `<button class="btn" data-fx-edit="${esc(data.path)}">${icon('i-edit')}Edit</button>` : ''}
-        ${isPdf || isImage || !data.is_text ? `<a class="btn" href="${rawUrl}" target="_blank" rel="noopener">${icon('i-globe')}Open</a>` : ''}
+        <a class="btn" href="${rawUrl}" download="${esc(data.name)}">${icon('i-download')}Download</a>
         <button class="btn" data-attach-vm-file="${esc(data.path)}" data-name="${esc(data.name)}" data-ext="${esc(data.ext)}" data-size="${esc(data.size_fmt)}">${icon('i-plus')}Attach</button>
         <button class="btn" data-ask-file="${esc(data.path)}">${icon('i-send')}Ask agent</button>
         <button class="btn" data-copy="${esc(data.path)}">${icon('i-copy')}Copy path</button>
@@ -1437,10 +1492,28 @@ function openQrSheet() {
 
 const TAB_TITLES = { skills: 'Skills', terminal: 'Terminal', monitor: 'System', history: 'All chats', settings: 'Settings' };
 
-// The rail is a fixed sidebar on desktop only; phones use the bottom tab bar.
-function openNav() {}
-function closeNav() {}
-function toggleNav() {}
+// Desktop preference persists; mobile navigation starts closed.
+const navDesktop = window.matchMedia('(min-width: 900px)');
+function setNavOpen(open) {
+  const rail = $('#rail');
+  rail.classList.toggle('open', open);
+  rail.inert = !open;
+  rail.setAttribute('aria-hidden', String(!open));
+  document.body.classList.toggle('nav-collapsed', !open);
+  $('#navToggle').setAttribute('aria-expanded', String(open));
+  $('#navToggle').setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
+  $('#navBackdrop').hidden = navDesktop.matches || !open;
+  if (navDesktop.matches) store.set('navOpen', open);
+}
+function openNav() { setNavOpen(true); }
+function closeNav() {
+  const focusInRail = $('#rail').contains(document.activeElement);
+  setNavOpen(false);
+  if (focusInRail) $('#navToggle').focus({ preventScroll: true });
+}
+function toggleNav() { setNavOpen(!$('#rail').classList.contains('open')); }
+navDesktop.addEventListener('change', () => setNavOpen(navDesktop.matches && store.get('navOpen', true)));
+setNavOpen(navDesktop.matches && store.get('navOpen', true));
 
 function switchTab(tab) {
   if (state.tab === 'history' && tab !== 'history' && $('#historySearch')) $('#historySearch').value = '';   // don't keep a folder filter around
@@ -1507,7 +1580,7 @@ function updateTopbarSub() {
    Agent / workspace selection
    ════════════════════════════════════════════════════════════ */
 
-const AGENT_ORDER = ['auto', 'claude', 'antigravity', 'codex', 'bash'];
+const AGENT_ORDER = ['auto', 'regina', 'claude', 'antigravity', 'codex', 'bash'];
 
 // Home composer: one chip per agent plus the workspace. Tapping the selected agent opens the model picker.
 function renderAgentRow() {
@@ -1706,6 +1779,27 @@ function mdToHtml(text) {
   return DOMPurify.sanitize(marked.parse(processed, { gfm: true, breaks: true }));
 }
 
+function openPhoneSheet(tel, label) {
+  const shown = (label || tel).trim();
+  openSheet(`
+    <div class="fx-menu-head"><span class="fx-menu-name">${esc(shown)}</span></div>
+    <div class="fx-menu-list">
+      <a class="opt" href="tel:${esc(tel)}" data-sheet="close"><span class="opt-ico">${icon('i-link')}</span><span class="opt-main"><span class="opt-title">Call</span></span></a>
+      <button class="opt" data-copy-val="${esc(shown)}"><span class="opt-ico">${icon('i-copy')}</span><span class="opt-main"><span class="opt-title">Copy number</span></span></button>
+    </div>
+  `);
+}
+
+function openLinkSheet(url) {
+  openSheet(`
+    <div class="fx-menu-head"><span class="fx-menu-name" style="word-break:break-all">${esc(url)}</span></div>
+    <div class="fx-menu-list">
+      <a class="opt" href="${esc(url)}" target="_blank" rel="noopener noreferrer"><span class="opt-ico">${icon('i-globe')}</span><span class="opt-main"><span class="opt-title">Open in browser</span></span></a>
+      <button class="opt" data-copy-val="${esc(url)}"><span class="opt-ico">${icon('i-copy')}</span><span class="opt-main"><span class="opt-title">Copy link</span></span></button>
+    </div>
+  `);
+}
+
 function formatDiffCode(rawCode) {
   const lines = (rawCode || '').split('\n');
   let adds = 0;
@@ -1731,8 +1825,42 @@ function formatDiffCode(rawCode) {
   return { html: htmlLines.join(''), adds, dels };
 }
 
+const PHONE_RE = /(?<![\w@/.:-])\+?\(?\d[\d ()./-]{6,17}\d(?![\w@-])/g;
+function linkifyPhones(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement && !n.parentElement.closest('a, pre, code, .katex, button')) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT,
+  });
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  nodes.forEach((node) => {
+    const txt = node.nodeValue;
+    PHONE_RE.lastIndex = 0;
+    let last = 0, m, frag = null;
+    while ((m = PHONE_RE.exec(txt))) {
+      const digits = m[0].replace(/\D/g, '');
+      const hasPlus = m[0].startsWith('+');
+      // skip dates, IPs and plain numbers: need a leading + or 0, or phone-style separators
+      if (digits.length < 7 || digits.length > 15 || /^\d{4}-\d{2}-\d{2}$/.test(m[0]) || (!hasPlus && !/^0|[ ()-]/.test(m[0]))) continue;
+      frag = frag || document.createDocumentFragment();
+      frag.append(txt.slice(last, m.index));
+      const a = document.createElement('a');
+      a.href = 'tel:' + (hasPlus ? '+' : '') + digits;
+      a.textContent = m[0];
+      frag.append(a);
+      last = m.index + m[0].length;
+    }
+    if (frag) { frag.append(txt.slice(last)); node.replaceWith(frag); }
+  });
+}
+
 function enhanceMarkdown(root, final) {
-  $$('a', root).forEach((a) => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
+  if (final) linkifyPhones(root);
+  $$('a', root).forEach((a) => {
+    a.target = '_blank'; a.rel = 'noopener noreferrer';
+    const href = a.getAttribute('href') || '';
+    if (/^tel:/i.test(href)) a.dataset.smartTel = href.replace(/^tel:/i, '');
+    else if (/^https?:/i.test(href)) a.dataset.smartLink = href;
+  });
   $$('table', root).forEach((t) => {
     const w = document.createElement('div'); w.className = 'table-wrap';
     t.replaceWith(w); w.appendChild(t);
@@ -1768,6 +1896,10 @@ function enhanceMarkdown(root, final) {
     const code = $('code', pre);
     const lang = (((code && code.className.match(/language-([\w+-]+)/)) || [])[1]) || '';
     const rawText = code ? code.textContent : pre.textContent;
+    if (RICH_LANGS.has(lang)) {
+      const rich = richBlock(lang, rawText);
+      if (rich) { pre.replaceWith(rich); return; }
+    }
     const isDiff = lang === 'diff' || lang === 'patch' || (rawText && (rawText.includes('\n@@ ') || (rawText.includes('\n+') && rawText.includes('\n-'))));
 
     if (isDiff) {
@@ -1801,6 +1933,767 @@ function enhanceMarkdown(root, final) {
     wrap.innerHTML = `<div class="codeblock-head"><span>${esc(lang || 'text')}</span><button class="act" data-copy-code aria-label="Copy code">${icon('i-copy')}Copy</button></div>`;
     pre.replaceWith(wrap); wrap.appendChild(pre);
   });
+  enrichMarkdown(root, final);
+}
+
+/* ── Rich rendering: tables, stat tiles, callouts, progress ───────────────
+   Everything is derived from plain markdown, so every agent gets it for free. */
+const STATUS_RULES = [
+  ['ok', /^(ok|okay|success(ful(ly)?)?|succeeded|pass(ed)?|done|complete[d]?|healthy|active|running|enabled|online|up|ready|resolved|fixed|merged|deployed|cleared|removed|deleted|discarded|discarded\s*\/\s*removed|yes|true|available)$/i],
+  ['bad', /^(fail(ed|ure)?|error(ed)?|critical|down|offline|crash(ed)?|reject(ed)?|denied|blocked|unhealthy|dead[- ]?letter(ed)?|no|false|missing|expired)$/i],
+  ['warn', /^(warn(ing)?|pending|waiting|queued|degraded|stale|partial|retry(ing)?|in[- ]progress|paused|skipped|unknown|review)$/i],
+  ['muted', /^(info|n\/a|na|none|disabled|inactive|idle|-|—|–)$/i],
+];
+const STATUS_EMOJI = { '✅': 'ok', '🟢': 'ok', '✔️': 'ok', '❌': 'bad', '🔴': 'bad', '🚫': 'bad', '⚠️': 'warn', '🟡': 'warn', '🟠': 'warn' };
+
+function statusOf(text) {
+  const t = (text || '').trim();
+  if (!t || t.length > 32) return null;
+  const em = /^(✅|🟢|✔️|❌|🔴|🚫|⚠️|🟡|🟠)\s*(.*)$/u.exec(t);
+  if (em) return { kind: STATUS_EMOJI[em[1]], label: em[2] || '' };
+  const clean = t.replace(/[*_`]/g, '');
+  for (const [kind, re] of STATUS_RULES) if (re.test(clean)) return { kind, label: clean };
+  return null;
+}
+
+const DT_RE = /^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?))?\s*(UTC|Z)?$/;
+function parseDate(text) {
+  const m = DT_RE.exec((text || '').trim());
+  if (!m) return null;
+  const d = new Date(`${m[1]}T${m[2] || '00:00:00'}${m[3] || !m[2] ? 'Z' : ''}`);
+  return isNaN(d) ? null : d;
+}
+function relTimeFrom(d) {
+  const s = Math.round((Date.now() - d.getTime()) / 1000), a = Math.abs(s);
+  const u = a < 60 ? [a, 's'] : a < 3600 ? [a / 60, 'm'] : a < 86400 ? [a / 3600, 'h'] : a < 2592000 ? [a / 86400, 'd'] : a < 31536000 ? [a / 2592000, 'mo'] : [a / 31536000, 'y'];
+  const n = Math.round(u[0]);
+  return s >= 0 ? `${n}${u[1]} ago` : `in ${n}${u[1]}`;
+}
+const NUM_RE = /^[-+]?\d[\d,]*(\.\d+)?\s*(%|ms|s|kb|mb|gb|tb|b|k|m|x)?$/i;
+const numOf = (t) => parseFloat((t || '').replace(/[,\s]/g, ''));
+const pillHtml = (st) => `<span class="pill ${st.kind}"><i></i>${esc(st.label)}</span>`;
+
+function copyOnTap(el, text) {
+  el.classList.add('copyable'); el.title = 'Tap to copy';
+  el.addEventListener('click', async (e) => {
+    if (window.getSelection && String(window.getSelection())) return;
+    e.stopPropagation();
+    toast((await copyText(text)) ? 'Copied' : 'Copy failed', 'ok'); haptic(6);
+  });
+}
+
+function enrichTable(table, wrap, final) {
+  const head = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+  const rows = [...table.querySelectorAll('tbody tr')];
+  if (!head.length || !rows.length) return;
+  const cols = head.length;
+  const cell = (r, c) => r.children[c];
+  const cols_ = head.map((h, c) => {
+    const texts = rows.map((r) => (cell(r, c)?.textContent || '').trim());
+    const filled = texts.filter(Boolean);
+    const n = Math.max(filled.length, 1);
+    const codeCells = rows.filter((r) => cell(r, c)?.querySelector('code')).length;
+    return {
+      status: filled.length > 0 && filled.every((t) => statusOf(t)),
+      num: filled.length > 0 && filled.every((t) => NUM_RE.test(t)) && !rows.some((r) => cell(r, head.indexOf(h))?.querySelector('code')) && !/(^|\W)(id|seq\w*|number|no\.?|#|version|port|year|code)(\W|$)/i.test(h),
+      date: filled.length > 0 && filled.every((t) => parseDate(t)),
+      mono: codeCells / rows.length >= 0.5,
+      plainNum: filled.length > 0 && filled.every((t) => /^[-+]?\d[\d,]*(\.\d+)?$/.test(t)),
+      texts,
+    };
+  });
+
+  // Normalise every cell: one font per column, no mixed chips.
+  rows.forEach((r) => cols_.forEach((k, c) => {
+    const td = cell(r, c); if (!td) return;
+    const text = td.textContent.trim();
+    td.querySelectorAll('code').forEach((cd) => cd.classList.add('cell-code'));
+    if (k.status) { const st = statusOf(text); td.innerHTML = pillHtml(st); td.classList.add('c-status'); return; }
+    if (k.mono) { td.classList.add('c-mono'); if (text.length >= 10) copyOnTap(td, text); }
+    if (k.date) {
+      const d = parseDate(text);
+      td.classList.add('c-date'); td.dataset.sort = d.getTime();
+      td.innerHTML = `<span class="dt-main">${esc(text)}</span><span class="dt-rel">${esc(relTimeFrom(d))}</span>`;
+    }
+    if (k.num) { td.classList.add('c-num'); td.dataset.sort = numOf(text); }
+  }));
+  const headCells = [...table.querySelectorAll('thead th')];
+  headCells.forEach((th, c) => { const k = cols_[c]; if (k.num) th.classList.add('c-num'); if (k.date) th.classList.add('c-date'); });
+
+  // Inline data bars for plain numeric columns (counts, sizes…).
+  cols_.forEach((k, c) => {
+    if (!k.plainNum || k.mono || rows.length < 3 || /(^|\W)(id|seq\w*|number|no\.?|#|version|port|year|code)(\W|$)/i.test(head[c])) return;
+    const vals = rows.map((r) => numOf(cell(r, c).textContent));
+    const max = Math.max(...vals.map(Math.abs));
+    if (!(max > 0)) return;
+    rows.forEach((r, i) => { const td = cell(r, c); td.classList.add('has-bar'); td.style.setProperty('--pct', `${Math.max(3, Math.abs(vals[i]) / max * 100).toFixed(0)}%`); });
+  });
+
+  if (!final) return;
+
+  // Cards view (mobile friendly) built from the same data.
+  const cards = document.createElement('div'); cards.className = 'tbl-cards'; cards.hidden = true;
+  rows.forEach((r) => {
+    const tds = [...r.children];
+    const card = document.createElement('div'); card.className = 'tbl-card';
+    const first = tds[0];
+    const ft = (first?.textContent || '').trim();
+    const t = document.createElement('div'); t.className = 'tbl-card-title'; t.innerHTML = first ? first.innerHTML : '';
+    card.appendChild(t);
+    tds.slice(1).forEach((td, i) => {
+      const line = document.createElement('div'); line.className = 'tbl-card-row';
+      line.innerHTML = `<span class="k">${esc(head[i + 1] || '')}</span><span class="v ${td.className}">${td.innerHTML}</span>`;
+      card.appendChild(line);
+    });
+    card.dataset.q = tds.map((td) => td.textContent).join(' ').toLowerCase();
+    cards.appendChild(card);
+  });
+
+  // Toolbar: count · filter · table/cards · copy CSV
+  const bar = document.createElement('div'); bar.className = 'tbl-bar';
+  bar.innerHTML = `<span class="tbl-count">${rows.length} row${rows.length === 1 ? '' : 's'} · ${cols} col${cols === 1 ? '' : 's'}</span>
+    ${rows.length > 6 ? '<input class="tbl-filter" type="search" placeholder="Filter…" aria-label="Filter rows">' : ''}
+    <span class="tbl-actions">
+      ${cols > 2 ? `<span class="seg" role="group"><button data-v="table" class="on" aria-label="Table view">Table</button><button data-v="cards" aria-label="Card view">Cards</button></span>` : ''}
+      <button class="act" data-csv aria-label="Copy as CSV">${icon('i-copy')}CSV</button>
+    </span>`;
+  wrap.before(bar); wrap.after(cards);
+
+  const LIMIT = 8; let expanded = rows.length <= LIMIT, q = '';
+  const more = document.createElement('button'); more.className = 'tbl-more'; cards.after(more);
+  const apply = () => {
+    let shown = 0, matched = 0;
+    rows.forEach((r, i) => {
+      const hit = !q || r.textContent.toLowerCase().includes(q);
+      if (hit) matched++;
+      const vis = hit && (expanded || q || shown < LIMIT);
+      if (vis) shown++;
+      r.hidden = !vis;
+      cards.children[i].hidden = !vis;
+    });
+    more.hidden = expanded || !!q || rows.length <= LIMIT;
+    more.textContent = `Show all ${rows.length} rows`;
+    bar.querySelector('.tbl-count').textContent = q ? `${matched} of ${rows.length} rows` : `${rows.length} row${rows.length === 1 ? '' : 's'} · ${cols} col${cols === 1 ? '' : 's'}`;
+  };
+  more.onclick = () => { expanded = true; apply(); };
+  const filter = bar.querySelector('.tbl-filter');
+  if (filter) filter.addEventListener('input', () => { q = filter.value.trim().toLowerCase(); apply(); });
+  const setView = (v) => {
+    wrap.hidden = v === 'cards'; cards.hidden = v !== 'cards';
+    bar.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.v === v));
+    apply();
+  };
+  bar.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.v)));
+  bar.querySelector('[data-csv]').addEventListener('click', async () => {
+    const esc_ = (s) => /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    const csv = [head, ...rows.map((r) => [...r.children].map((td) => td.textContent.trim()))].map((l) => l.map(esc_).join(',')).join('\n');
+    toast((await copyText(csv)) ? 'Table copied as CSV' : 'Copy failed', 'ok');
+  });
+
+  // Tap a header to sort.
+  let sortCol = -1, dir = 1;
+  headCells.forEach((th, c) => {
+    th.classList.add('sortable');
+    th.addEventListener('click', () => {
+      dir = sortCol === c ? -dir : 1; sortCol = c;
+      headCells.forEach((h) => h.removeAttribute('aria-sort'));
+      th.setAttribute('aria-sort', dir === 1 ? 'ascending' : 'descending');
+      const key = (r) => { const td = r.children[c]; return td.dataset.sort !== undefined ? parseFloat(td.dataset.sort) : td.textContent.trim().toLowerCase(); };
+      const order = rows.map((r, i) => i).sort((a, b) => { const x = key(rows[a]), y = key(rows[b]); return (x > y ? 1 : x < y ? -1 : 0) * dir; });
+      const tb = rows[0].parentNode;
+      order.forEach((i) => tb.appendChild(rows[i]));
+      order.forEach((i) => cards.appendChild(cards.children[i]));
+      rows.splice(0, rows.length, ...order.map((i) => rows[i]));
+      apply();
+    });
+  });
+
+  const narrow = window.matchMedia && matchMedia('(max-width: 560px)').matches;
+  if (narrow && cols >= 4) setView('cards'); else apply();
+}
+
+const CALLOUTS = {
+  note: ['info', 'Note'], info: ['info', 'Info'], tip: ['tip', 'Tip'], hint: ['tip', 'Tip'], important: ['important', 'Important'],
+  warning: ['warn', 'Warning'], caution: ['bad', 'Caution'], danger: ['bad', 'Danger'], success: ['ok', 'Success'], done: ['ok', 'Done'], error: ['bad', 'Error'],
+};
+const CALLOUT_EMOJI = { 'ℹ️': 'info', '💡': 'tip', '⚠️': 'warn', '🚨': 'bad', '❌': 'bad', '✅': 'ok', '📌': 'important', '❗': 'important' };
+const CALLOUT_GLYPH = { info: 'i', tip: '✦', important: '!', warn: '!', bad: '✕', ok: '✓' };
+
+function enrichCallouts(root) {
+  $$('blockquote', root).forEach((bq) => {
+    const p = bq.querySelector(':scope > p'); if (!p) return;
+    const txt = p.textContent.trim();
+    let key = null, strip = null;
+    let m = /^\[!(\w+)\]\s*/.exec(txt);
+    if (m && CALLOUTS[m[1].toLowerCase()]) { key = CALLOUTS[m[1].toLowerCase()]; strip = m[0]; }
+    if (!key && (m = /^(note|tip|warning|important|caution|info|success)\s*[:：]\s*/i.exec(txt))) { key = CALLOUTS[m[1].toLowerCase()]; strip = m[0]; }
+    if (!key) for (const [e, k] of Object.entries(CALLOUT_EMOJI)) if (txt.startsWith(e)) { key = [k, CALLOUTS[k]?.[1] || ({ ok: 'Success', bad: 'Problem', warn: 'Warning', tip: 'Tip', info: 'Note', important: 'Important' })[k]]; strip = e; break; }
+    if (!key) return;
+    // remove the marker from the first text node
+    const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode(), left = strip.length;
+    while (node && left > 0) { const t = node.nodeValue.replace(/^\s+/, ''); const cut = Math.min(left, t.length); node.nodeValue = t.slice(cut); left -= cut; node = walker.nextNode(); }
+    while (p.firstChild && (p.firstChild.nodeName === 'BR' || (p.firstChild.nodeType === 3 && !p.firstChild.nodeValue.trim()))) p.firstChild.remove();
+    const div = document.createElement('div'); div.className = `callout ${key[0]}`;
+    div.innerHTML = `<span class="callout-ico">${CALLOUT_GLYPH[key[0]]}</span><div class="callout-main"><div class="callout-title">${esc(key[1])}</div><div class="callout-body"></div></div>`;
+    $('.callout-body', div).append(...bq.childNodes);
+    bq.replaceWith(div);
+  });
+}
+
+// "- **Active Messages:** `0`" lists → a grid of stat tiles.
+function enrichStats(root) {
+  $$('ul', root).forEach((ul) => {
+    if (ul.closest('.callout, .stat-grid, li') || ul.querySelector('input[type=checkbox]')) return;
+    const lis = [...ul.children].filter((n) => n.tagName === 'LI');
+    if (lis.length < 2 || lis.length > 8) return;
+    const parsed = lis.map((li) => {
+      if (li.querySelector('ul, ol, pre, table')) return null;
+      const t = li.textContent.trim();
+      const m = /^([^:\n]{2,34}):\s*(.{1,60})$/.exec(t);
+      if (!m) return null;
+      let value = m[2].trim(), note = '';
+      const nm = /^(.*?)\s*\(([^)]{1,60})\)$/.exec(value);
+      if (nm && nm[1]) { value = nm[1].trim(); note = nm[2].trim(); }
+      return { label: m[1].replace(/[*_`]/g, '').trim(), value: value.replace(/[`*]/g, ''), note };
+    });
+    if (parsed.some((x) => !x) || lis.some((li) => !li.querySelector('strong, b'))) return;
+    const grid = document.createElement('div'); grid.className = 'stat-grid';
+    grid.innerHTML = parsed.map((s) => {
+      const st = statusOf(s.value);
+      const big = /^[-+]?\d[\d,.]*\s*\S{0,3}$/.test(s.value) && !st;
+      const val = st ? pillHtml(st) : `<span class="stat-val ${big ? 'big' : ''}${s.value === '0' ? ' zero' : ''}">${esc(s.value)}</span>`;
+      return `<div class="stat"><div class="stat-label">${esc(s.label)}</div>${val}${s.note ? `<div class="stat-note">${esc(s.note)}</div>` : ''}</div>`;
+    }).join('');
+    ul.replaceWith(grid);
+  });
+}
+
+// GFM task lists → progress bar header.
+function enrichTasks(root) {
+  $$('ul', root).forEach((ul) => {
+    const boxes = [...ul.querySelectorAll(':scope > li > input[type=checkbox]')];
+    if (boxes.length < 2) return;
+    const done = boxes.filter((b) => b.checked).length, pct = Math.round(done / boxes.length * 100);
+    ul.classList.add('task-list');
+    boxes.forEach((b) => b.closest('li').classList.toggle('done', b.checked));
+    const prog = document.createElement('div'); prog.className = 'progress';
+    prog.innerHTML = `<div class="bar"><i style="width:${pct}%"></i></div><span>${done} of ${boxes.length} done</span>`;
+    ul.before(prog);
+  });
+}
+
+function enrichMarkdown(root, final) {
+  try {
+    enrichCallouts(root);
+    enrichStats(root);
+    enrichTasks(root);
+    enrichMath(root);
+    $$('.table-wrap', root).forEach((w) => { const t = $('table', w); if (t) enrichTable(t, w, final); });
+    $$('p code, li code, h1 code, h2 code, h3 code, h4 code', root).forEach((c) => {
+      if (c.closest('.table-wrap, .tbl-cards, .codeblock, .copyable')) return;
+      const t = c.textContent;
+      if (t.length >= 10 && !/\s/.test(t)) copyOnTap(c, t);
+    });
+  } catch (e) { console.warn('rich render failed', e); }
+}
+
+// Render LaTeX once a message is settled. Block math ($$…$$ / \[…\]) becomes a
+// .katex-block, inline math (\(…\) / $…$) is replaced in place. KaTeX is
+// lazy-loaded from CDN on first use; until it arrives, the raw TeX is shown.
+function enrichMath(root) {
+  const hasTex = /\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|(?<![\\$])\$[^$\n]+\$/.test(root.textContent || '');
+  const placeholders = $$('.katex-block', root);
+  if (!hasTex && !placeholders.length) return;
+
+  const paint = () => {
+    $$('.katex-block', root).forEach((b) => { const tex = b.dataset.tex || b.textContent; b.innerHTML = renderKatex(tex, true); });
+    walkTextMath(root);
+  };
+  if (window.katex) { paint(); return; }
+  loadKatex().then((ok) => { if (ok) paint(); });
+}
+
+// Replace inline $$…$$ / $…$ / \(…\) / \[…\] text nodes with rendered math, skipping code.
+function walkTextMath(root) {
+  const RE = /\$\$([^$\n]+?)\$\$|(?<![\\$])\$([^$\n]+?)\$|\\\(([\s\S]+?)\\\)|\\\[([\s\S]+?)\\\]/;
+  const skip = (n) => { const p = n.parentNode; return p && p.closest && p.closest('code, pre, .codeblock, .katex-block, .katex, .matrix, .tree'); };
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (RE.test(n.nodeValue || '') && !skip(n)) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT,
+  });
+  const targets = [];
+  let n; while ((n = walker.nextNode())) targets.push(n);
+  targets.forEach((node) => {
+    const text = node.nodeValue;
+    const frag = document.createDocumentFragment();
+    let last = 0, m;
+    const re = new RegExp(RE.source, 'g');
+    while ((m = re.exec(text))) {
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const tex = m[1] ?? m[2] ?? m[3] ?? m[4] ?? '';
+      const display = m[1] != null || m[4] != null;
+      const span = document.createElement('span');
+      span.className = display ? 'katex-display-inline' : 'katex-inline';
+      span.innerHTML = renderKatex(tex, display);
+      frag.appendChild(span);
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    if (frag.childNodes.length && node.parentNode) node.parentNode.replaceChild(frag, node);
+  });
+}
+
+/* ── Chart + timeline blocks (```chart JSON, ```timeline lines) ─────────────── */
+const CHART_COLORS = ['#7c8cff', '#34d399', '#fbbf24', '#c79bff', '#5fd4e8', '#f87171', '#f0a35e', '#9aa5ff'];
+const fmtNum = (n) => (Math.abs(n) >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 1 }) : String(Math.round(n * 100) / 100));
+
+const RICH_LANGS = new Set(['chart', 'timeline', 'kv', 'keyvalue', 'record', 'gauge', 'gauges', 'spark', 'sparkline', 'metrics', 'dashboard', 'heatmap', 'calendar', 'matrix', 'compare', 'options', 'steps', 'stepper', 'pipeline', 'rings', 'badges', 'tree', 'math', 'latex', 'katex', 'tex', 'mermaid', 'sequence', 'flow', 'flowchart']);
+function richBlock(lang, text) {
+  try {
+    if (lang === 'chart') return chartBlock(JSON.parse(text));
+    if (lang === 'timeline') return timelineBlock(text);
+    if (lang === 'kv' || lang === 'keyvalue' || lang === 'record') return kvBlock(JSON.parse(text));
+    if (lang === 'gauge' || lang === 'gauges') return gaugeBlock(JSON.parse(text));
+    if (lang === 'spark' || lang === 'sparkline') return sparkBlock(JSON.parse(text));
+    if (lang === 'metrics' || lang === 'dashboard') return metricsBlock(JSON.parse(text));
+    if (lang === 'heatmap' || lang === 'calendar') return heatBlock(JSON.parse(text));
+    if (lang === 'matrix') return matrixBlock(JSON.parse(text));
+    if (lang === 'compare' || lang === 'options') return compareBlock(JSON.parse(text));
+    if (lang === 'steps' || lang === 'stepper' || lang === 'pipeline') return stepsBlock(JSON.parse(text));
+    if (lang === 'rings') return ringsBlock(JSON.parse(text));
+    if (lang === 'badges') return badgesBlock(JSON.parse(text));
+    if (lang === 'tree') return treeBlock(text);
+    if (lang === 'mermaid' || lang === 'sequence' || lang === 'flow' || lang === 'flowchart') return mermaidBlock(lang, text);
+    if (lang === 'math' || lang === 'latex' || lang === 'katex' || lang === 'tex') return mathBlock(text);
+  } catch { /* still streaming, or malformed: it stays a normal code block */ }
+  return null;
+}
+
+/* ── Mermaid diagrams (```mermaid, ```sequence, ```flow): lazy-loaded from CDN ── */
+let mermaidReady = null;
+function loadMermaid() {
+  if (!mermaidReady) {
+    mermaidReady = new Promise((resolve, reject) => {
+      if (window.mermaid) return resolve(window.mermaid);
+      const sc = document.createElement('script');
+      sc.src = 'https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js';
+      sc.onload = () => {
+        window.mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict', fontFamily: 'inherit' });
+        resolve(window.mermaid);
+      };
+      sc.onerror = () => { mermaidReady = null; reject(new Error('mermaid load failed')); };
+      document.head.appendChild(sc);
+    });
+  }
+  return mermaidReady;
+}
+let mermaidSeq = 0;
+function mermaidBlock(lang, text) {
+  let src = text.trim();
+  if (!src) return null;
+  // ```sequence / ```flow may omit the Mermaid header line
+  if (lang === 'sequence' && !/^sequenceDiagram/.test(src)) src = `sequenceDiagram\n${src}`;
+  if ((lang === 'flow' || lang === 'flowchart') && !/^(flowchart|graph)\b/.test(src)) src = `flowchart TD\n${src}`;
+  const el = document.createElement('figure');
+  el.className = 'chart mermaid-block';
+  el.innerHTML = '<div class="mermaid-body muted">Rendering diagram…</div>';
+  const body = el.firstChild;
+  loadMermaid()
+    .then((m) => m.render(`mmd-${Date.now()}-${mermaidSeq++}`, src))
+    .then(({ svg }) => { body.classList.remove('muted'); body.innerHTML = svg; })
+    .catch(() => {
+      // malformed or still streaming: fall back to a plain code block
+      document.querySelectorAll('[id^="dmmd-"]').forEach((n) => n.remove());
+      const pre = document.createElement('pre');
+      const code = document.createElement('code');
+      code.textContent = text;
+      pre.appendChild(code);
+      el.replaceWith(pre);
+    });
+  return el;
+}
+
+function chartBlock(spec) {
+  let pts = [];
+  if (Array.isArray(spec.data)) pts = spec.data.map((d) => ({ label: String(d.label ?? d.name ?? ''), value: Number(d.value) }));
+  else if (Array.isArray(spec.labels) && Array.isArray(spec.values)) pts = spec.labels.map((l, i) => ({ label: String(l), value: Number(spec.values[i]) }));
+  pts = pts.filter((p) => Number.isFinite(p.value)).slice(0, 24);
+  if (pts.length < 2) return null;
+  const type = ['bar', 'line', 'donut'].includes(spec.type) ? spec.type : 'bar';
+  const unit = spec.unit ? String(spec.unit) : '';
+  const el = document.createElement('figure');
+  el.className = `chart chart-${type}`;
+  const title = spec.title ? `<figcaption class="chart-title">${esc(String(spec.title))}</figcaption>` : '';
+  const val = (v) => `${fmtNum(v)}${unit ? ` <span class="chart-unit">${esc(unit)}</span>` : ''}`;
+
+  if (type === 'bar') {
+    const max = Math.max(...pts.map((p) => Math.abs(p.value))) || 1;
+    el.innerHTML = `${title}<div class="chart-bars">${pts.map((p, i) => `
+      <div class="cb-row"><span class="cb-label" title="${esc(p.label)}">${esc(p.label)}</span>
+      <span class="cb-track"><i style="width:${Math.max(2, Math.abs(p.value) / max * 100).toFixed(1)}%;background:${p.value < 0 ? '#f87171' : CHART_COLORS[0]}"></i></span>
+      <span class="cb-val">${val(p.value)}</span></div>`).join('')}</div>`;
+  } else if (type === 'line') {
+    const W = 320, H = 140, L = 34, R = 10, T = 10, B = 24;
+    const vals = pts.map((p) => p.value), lo = Math.min(...vals), hi = Math.max(...vals);
+    const span = hi - lo || 1;
+    const x = (i) => L + (pts.length === 1 ? 0 : i * (W - L - R) / (pts.length - 1));
+    const y = (v) => T + (H - T - B) * (1 - (v - lo) / span);
+    const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join('');
+    const area = `${line}L${x(pts.length - 1).toFixed(1)},${H - B}L${x(0).toFixed(1)},${H - B}Z`;
+    const every = Math.ceil(pts.length / 6);
+    el.innerHTML = `${title}<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(String(spec.title || 'Line chart'))}">
+      <line class="ch-grid" x1="${L}" x2="${W - R}" y1="${y(hi)}" y2="${y(hi)}"/><line class="ch-grid" x1="${L}" x2="${W - R}" y1="${y(lo)}" y2="${y(lo)}"/>
+      <text class="ch-axis" x="${L - 4}" y="${y(hi) + 3}" text-anchor="end">${esc(fmtNum(hi))}</text><text class="ch-axis" x="${L - 4}" y="${y(lo) + 3}" text-anchor="end">${esc(fmtNum(lo))}</text>
+      <path class="ch-area" d="${area}"/><path class="ch-line" d="${line}"/>
+      ${pts.map((p, i) => `<circle class="ch-dot" cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="3"><title>${esc(p.label)}: ${esc(fmtNum(p.value))}${esc(unit)}</title></circle>`).join('')}
+      ${pts.map((p, i) => (i % every === 0 || i === pts.length - 1) ? `<text class="ch-axis" x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="${i === pts.length - 1 && pts.length > 2 ? 'end' : i === 0 ? 'start' : 'middle'}">${esc(p.label.length > 8 ? p.label.slice(0, 7) + '…' : p.label)}</text>` : '').join('')}
+    </svg>`;
+  } else {
+    const total = pts.reduce((a, p) => a + Math.max(0, p.value), 0) || 1;
+    const R = 46, C = 2 * Math.PI * R; let off = 0;
+    const arcs = pts.map((p, i) => {
+      const len = Math.max(0, p.value) / total * C;
+      const a = `<circle cx="60" cy="60" r="${R}" fill="none" stroke="${CHART_COLORS[i % CHART_COLORS.length]}" stroke-width="16" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}" transform="rotate(-90 60 60)"><title>${esc(p.label)}: ${esc(fmtNum(p.value))}${esc(unit)}</title></circle>`;
+      off += len; return a;
+    }).join('');
+    el.innerHTML = `${title}<div class="chart-donut-wrap"><svg viewBox="0 0 120 120" role="img" aria-label="${esc(String(spec.title || 'Donut chart'))}">${arcs}<text x="60" y="60" text-anchor="middle" dominant-baseline="central" class="ch-total">${esc(fmtNum(total))}</text></svg>
+      <ul class="chart-legend">${pts.map((p, i) => `<li><i style="background:${CHART_COLORS[i % CHART_COLORS.length]}"></i><span>${esc(p.label)}</span><b>${val(p.value)}</b><em>${(Math.max(0, p.value) / total * 100).toFixed(0)}%</em></li>`).join('')}</ul></div>`;
+  }
+  return el;
+}
+
+
+/* ── v2 component pack: kv, gauge, spark, metrics, heatmap, matrix,
+   tree, compare, stepper, rings, badges, math. All from fenced blocks. ── */
+
+function svgSpark(values, { width = 100, height = 30, pad = 2 } = {}) {
+  const vals = values.map(Number).filter(Number.isFinite);
+  if (vals.length < 2) return '';
+  const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
+  const x = (i) => pad + (vals.length === 1 ? 0 : (i * (width - pad * 2)) / (vals.length - 1));
+  const y = (v) => pad + (height - pad * 2) * (1 - (v - lo) / span);
+  const line = vals.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(2)},${y(v).toFixed(2)}`).join('');
+  const area = `${line}L${x(vals.length - 1).toFixed(2)},${height - pad}L${x(0).toFixed(2)},${height - pad}Z`;
+  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true"><path class="sp-area" d="${area}"/><path class="sp-line" d="${line}"/></svg>`;
+}
+
+function kvBlock(spec) {
+  if (!spec || typeof spec !== 'object') return null;
+  const entries = Array.isArray(spec.items)
+    ? spec.items.map((it) => [String(it.key ?? it.label ?? ''), it])
+    : Object.entries(spec.data || spec.fields || {});
+  if (!entries.length) return null;
+  const el = document.createElement('div');
+  el.className = 'kv';
+  const title = spec.title ? `<div class="kv-head">${spec.icon ? `<span class="kv-ico">${icon(spec.icon)}</span>` : ''}<span class="kv-title">${esc(String(spec.title))}</span>${spec.subtitle ? `<span class="kv-sub">${esc(String(spec.subtitle))}</span>` : ''}</div>` : '';
+  const rows = entries.map(([k, v]) => {
+    const obj = (v && typeof v === 'object') ? v : { value: v };
+    const raw = obj.value ?? obj.v ?? '';
+    const st = statusOf(String(raw));
+    const isCode = obj.mono || obj.code || (/^[\w./@:-]{1,64}$/.test(String(raw)) && !st);
+    let valHtml = st ? pillHtml(st)
+      : `<span class="${isCode ? 'kv-mono' : ''}">${esc(String(raw))}</span>`;
+    if (obj.link) valHtml = `<a href="${esc(String(obj.link))}" target="_blank" rel="noopener noreferrer">${valHtml}</a>`;
+    const copy = (obj.copy !== false && !st && String(raw).length >= 4 && !/\s/.test(String(raw)))
+      ? `<button class="act kv-copy" aria-label="Copy">${icon('i-copy', 'xs')}</button>` : '';
+    return `<div class="kv-cell kv-key">${obj.icon ? icon(obj.icon, 'xs k-ico') : ''}${esc(k)}</div>`
+      + `<div class="kv-cell kv-val">${valHtml}${copy}</div>`;
+  }).join('');
+  el.innerHTML = `${title}<div class="kv-grid">${rows}</div>`;
+  $$('.kv-copy', el).forEach((btn) => {
+    const cell = btn.closest('.kv-cell');
+    const text = (cell ? cell.textContent : '').trim();
+    btn.addEventListener('click', async () => { toast((await copyText(text)) ? 'Copied' : 'Copy failed', 'ok'); haptic(6); });
+  });
+  return el;
+}
+
+function gaugeTone(pct, spec) {
+  if (spec && spec.tone) return spec.tone;
+  const warnAt = spec && spec.warnAt != null ? spec.warnAt : 75;
+  const badAt = spec && spec.badAt != null ? spec.badAt : 90;
+  return pct >= badAt ? 'bad' : pct >= warnAt ? 'warn' : 'ok';
+}
+
+function gaugeRingHtml(pct, label, big, unit, tone, sub) {
+  const R = 44, C = 2 * Math.PI * R, off = C * (1 - Math.max(0, Math.min(100, pct)) / 100);
+  return `<div class="gauge-item ${tone}"><div class="gauge-ring"><svg viewBox="0 0 104 104">
+      <circle class="g-track" cx="52" cy="52" r="${R}"/>
+      <circle class="g-val" cx="52" cy="52" r="${R}" stroke-dasharray="${C.toFixed(2)}" stroke-dashoffset="${off.toFixed(2)}"/>
+    </svg><div class="gauge-center"><div><span class="gauge-big">${esc(big)}</span><span class="gauge-unit">${unit ? ' ' + esc(unit) : ''}</span></div></div></div>
+    ${label ? `<div class="gauge-label">${esc(label)}</div>` : ''}${sub ? `<div class="gauge-sub">${esc(sub)}</div>` : ''}</div>`;
+}
+
+function gaugeBlock(spec) {
+  const items = Array.isArray(spec.items) ? spec.items
+    : Array.isArray(spec.gauges) ? spec.gauges
+    : (spec.value != null ? [spec] : null);
+  if (!items || !items.length) return null;
+  const el = document.createElement('div');
+  el.className = 'gauge';
+  el.innerHTML = `<div class="gauge-set">${items.slice(0, 8).map((it) => {
+    const max = it.max != null ? Number(it.max) : 100;
+    const val = Number(it.value ?? it.pct ?? 0);
+    const pct = it.pct != null ? Number(it.pct) : (max ? (val / max) * 100 : val);
+    const big = it.display != null ? String(it.display) : (it.pct != null || max === 100 ? `${Math.round(pct)}%` : fmtNum(val));
+    const unit = it.pct != null || max === 100 ? '' : (it.unit || '');
+    return gaugeRingHtml(pct, it.label != null ? String(it.label) : (spec.title || ''), big, unit, gaugeTone(pct, it), it.sub || it.note || '');
+  }).join('')}</div>`;
+  return el;
+}
+
+function sparkBlock(spec) {
+  let vals = [];
+  let labels = [];
+  if (Array.isArray(spec)) vals = spec;
+  else if (Array.isArray(spec.values)) { vals = spec.values; labels = spec.labels || []; }
+  else if (Array.isArray(spec.data)) {
+    vals = spec.data.map((d) => Number(d.value ?? d));
+    labels = spec.data.map((d) => String(d.label ?? d.name ?? ''));
+  }
+  vals = vals.map(Number).filter(Number.isFinite);
+  if (vals.length < 2) return null;
+  const last = vals[vals.length - 1], first = vals[0];
+  const delta = last - first;
+  const dir = Math.abs(delta) < 1e-9 ? 'flat' : delta > 0 ? 'up' : 'down';
+  const unit = spec.unit ? String(spec.unit) : '';
+  const el = document.createElement('div');
+  el.className = 'spark';
+  el.innerHTML = `<div class="spark-head">
+      <span class="spark-title">${esc(String(spec.title || 'Trend'))}</span>
+      ${spec.delta !== false ? `<span class="spark-delta ${dir}">${dir === 'up' ? '▲' : dir === 'down' ? '▼' : '■'} ${esc(fmtNum(Math.abs(delta)))}${esc(unit)}</span>` : ''}
+      <span class="spark-last">${esc(fmtNum(last))}${unit ? ` <span class="chart-unit">${esc(unit)}</span>` : ''}</span>
+    </div>${svgSpark(vals, { width: 240, height: 48 })}
+    <div class="spark-foot"><span>${esc(labels[0] || '')}</span><span>${vals.length} pts</span><span>${esc(labels[labels.length - 1] || '')}</span></div>`;
+  return el;
+}
+
+function metricsBlock(spec) {
+  const items = Array.isArray(spec) ? spec : (Array.isArray(spec.items) ? spec.items : Array.isArray(spec.metrics) ? spec.metrics : null);
+  if (!items || !items.length) return null;
+  const el = document.createElement('div');
+  el.className = 'metrics';
+  el.innerHTML = items.slice(0, 12).map((it) => {
+    const st = statusOf(String(it.value ?? ''));
+    const tone = it.tone || (st ? st.kind : '');
+    const spark = Array.isArray(it.spark) && it.spark.length >= 2 ? `<div class="metric-spark">${svgSpark(it.spark, { width: 120, height: 26 })}</div>` : '';
+    const val = st ? pillHtml(st) : `<span class="metric-val">${esc(String(it.value ?? it.v ?? ''))}${it.unit ? `<small>${esc(String(it.unit))}</small>` : ''}</span>`;
+    return `<div class="metric ${tone ? 'metric-tone-' + tone : ''}">
+      <div class="metric-top">${it.icon ? icon(it.icon, 'xs') : ''}<span class="metric-label">${esc(String(it.label ?? it.k ?? ''))}</span></div>
+      ${val}${it.note ? `<div class="metric-note">${esc(String(it.note))}</div>` : ''}${spark}</div>`;
+  }).join('');
+  return el;
+}
+
+function heatBlock(spec) {
+  let days = [];
+  if (Array.isArray(spec.data)) days = spec.data.map((d) => ({ date: String(d.date ?? d.label ?? ''), value: Number(d.value ?? d.count ?? 0) }));
+  else if (Array.isArray(spec.values)) days = spec.values.map((v, i) => ({ date: String((spec.labels || [])[i] ?? ''), value: Number(v) }));
+  days = days.filter((d) => Number.isFinite(d.value));
+  if (days.length < 4) return null;
+  const max = Math.max(...days.map((d) => d.value), 1);
+  const level = (v) => (v <= 0 ? 0 : v >= max ? 4 : Math.max(1, Math.round((v / max) * 4)));
+  // Arrange into weeks (columns of 7). Pad the first week so days align by weekday.
+  const firstDate = parseDate(days[0].date) || new Date();
+  const lead = firstDate.getDay();
+  const cells = [...Array(lead).fill(null), ...days];
+  const weeks = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  const el = document.createElement('div');
+  el.className = 'heatmap';
+  el.innerHTML = `${spec.title ? `<div class="heat-title">${esc(String(spec.title))}</div>` : ''}
+    <div class="heat-grid">${weeks.map((w) => `<div class="heat-col">${w.map((d) => {
+      if (!d) return `<div class="heat-cell" style="visibility:hidden"></div>`;
+      const lv = level(d.value);
+      const cls = d.status ? String(d.status) : (lv ? 'l' + lv : '');
+      return `<div class="heat-cell ${cls}" title="${esc(d.date)}: ${esc(fmtNum(d.value))}"></div>`;
+    }).join('')}</div>`).join('')}</div>
+    <div class="heat-legend">Less<span class="heat-cell"></span><span class="heat-cell l1"></span><span class="heat-cell l2"></span><span class="heat-cell l3"></span><span class="heat-cell l4"></span>More · peak ${esc(fmtNum(max))}</div>`;
+  return el;
+}
+
+function matrixBlock(spec) {
+  const rows = Array.isArray(spec.rows) ? spec.rows : null;
+  const cols = Array.isArray(spec.cols) ? spec.cols : null;
+  if (!rows || !cols) return null;
+  const norm = (v) => {
+    const t = String(v ?? '').toLowerCase().trim();
+    if (['ok', 'pass', 'passed', '✓', '✅', '1', 'true', 'good', 'yes'].includes(t)) return 'ok';
+    if (['bad', 'fail', 'failed', '✗', '❌', '0', 'false', 'error', 'no'].includes(t)) return 'bad';
+    if (['warn', 'warning', '⚠️', 'flaky', 'skip', 'skipped', '-', '—', 'n/a', 'na'].includes(t)) return 'warn';
+    return 'skip';
+  };
+  const sym = { ok: '✓', bad: '✕', warn: '⚠', skip: '·' };
+  const el = document.createElement('div');
+  el.className = 'matrix';
+  el.innerHTML = `<table><thead><tr><th></th>${cols.map((c) => `<th>${esc(String(c))}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map((r) => {
+      const cells = Array.isArray(r.cells) ? r.cells : (Array.isArray(r.values) ? r.values : []);
+      return `<tr><th style="text-align:right">${esc(String(r.label ?? r.name ?? ''))}</th>${cols.map((_, i) => {
+        const k = norm(cells[i]);
+        return `<td class="${k}" title="${esc(String(cells[i] ?? ''))}">${sym[k]}</td>`;
+      }).join('')}</tr>`;
+    }).join('')}</tbody></table>${spec.caption ? `<div class="matrix-caption">${esc(String(spec.caption))}</div>` : ''}`;
+  return el;
+}
+
+function treeBlock(text) {
+  const lines = text.split('\n').map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim());
+  if (lines.length < 1) return null;
+  const iconFor = (name, isDir) => isDir ? 'i-folder' : (/\.(png|jpe?g|gif|svg|webp|ico)$/i.test(name) ? 'i-globe' : /\.(md|txt|json|ya?ml|toml)$/i.test(name) ? 'i-box' : 'i-terminal');
+  const el = document.createElement('div');
+  el.className = 'tree';
+  el.innerHTML = lines.map((raw) => {
+    // Derive depth from the box-drawing prefix, keep the connector as literal art.
+    const m = /^([│├└─\s]*)(.*)$/.exec(raw);
+    const prefix = m[1], rest = m[2];
+    const isDir = /\/\s*$/.test(rest) || /\/(\s|$)/.test(rest) && !/\.\w+/.test(rest);
+    const metaM = /\s*\(([^)]+)\)\s*$/.exec(rest);
+    const name = metaM ? rest.slice(0, metaM.index) : rest;
+    const meta = metaM ? metaM[1] : '';
+    const clean = name.replace(/\/\s*$/, '');
+    return `<div class="tree-row ${isDir ? 'dir' : ''}" data-src="${esc(clean)}"><span style="color:var(--text-3)">${esc(prefix)}</span>`
+      + `<span class="tr-ico">${icon(iconFor(clean, isDir), 'xs')}</span>`
+      + `<span class="tr-name">${esc(clean)}${isDir ? '/' : ''}</span>`
+      + `${meta ? `<span class="tr-meta">${esc(meta)}</span>` : ''}</div>`;
+  }).join('');
+  return el;
+}
+
+function compareBlock(spec) {
+  const cards = Array.isArray(spec) ? spec : (Array.isArray(spec.cards) ? spec.cards : (Array.isArray(spec.options) ? spec.options : null));
+  if (!cards || cards.length < 1) return null;
+  const el = document.createElement('div');
+  el.className = 'compare' + (cards.length === 1 ? ' single' : '');
+  el.innerHTML = cards.slice(0, 2).map((c) => {
+    const items = Array.isArray(c.items) ? c.items : Array.isArray(c.points) ? c.points : [];
+    return `<div class="cmp-card ${c.recommended || c.rec ? 'rec' : ''}">
+      <div class="cmp-head">${c.icon ? icon(c.icon, 'xs') : ''}${esc(String(c.title ?? c.label ?? ''))}${(c.recommended || c.rec) ? `<span class="cmp-badge">Recommended</span>` : ''}</div>
+      <div class="cmp-body">${items.map((it) => {
+        const obj = (it && typeof it === 'object') ? it : { text: it };
+        const t = String(obj.text ?? obj.label ?? obj.value ?? '');
+        const tone = obj.tone || (obj.good === true ? 'good' : obj.bad === true ? 'bad' : 'neutral');
+        const glyph = obj.icon || (tone === 'good' ? 'i-check' : tone === 'bad' ? 'i-x' : 'i-chevron');
+        return `<div class="cmp-item ${tone}"><span class="ci">${icon(glyph, 'xs')}</span><span>${mdInline(t)}</span></div>`;
+      }).join('')}</div></div>`;
+  }).join('');
+  return el;
+}
+
+function stepsBlock(spec) {
+  const items = Array.isArray(spec) ? spec : (Array.isArray(spec.steps) ? spec.steps : null);
+  if (!items || items.length < 2) return null;
+  const parsed = items.map((it) => (it && typeof it === 'object') ? it : { label: String(it) });
+  let current = parsed.findIndex((s, i) => (s.state || s.status || '').toLowerCase() === 'current' || (s.state || '').toLowerCase() === 'active' || (s.state || '').toLowerCase() === 'now');
+  if (current < 0) current = parsed.filter((s) => ['done', 'ok', 'complete', 'completed', 'success'].includes(String(s.state || s.status || '').toLowerCase())).length;
+  const stateOf = (s, i) => {
+    const st = String(s.state || s.status || '').toLowerCase();
+    if (['done', 'ok', 'complete', 'completed', 'success'].includes(st)) return 'ok';
+    if (['failed', 'error', 'bad'].includes(st)) return 'bad';
+    if (['warn', 'warning'].includes(st)) return 'warn';
+    if (['current', 'active', 'now'].includes(st)) return 'now';
+    if (i === current) return 'now';
+    return 'todo';
+  };
+  const el = document.createElement('div');
+  el.className = 'stepper';
+  el.innerHTML = parsed.map((s, i) => {
+    const st = stateOf(s, i);
+    return `<div class="step-node ${st}">
+      <div class="step-mark">
+        <div class="step-dot2">${st === 'ok' ? icon('i-check', 'xs') : st === 'bad' ? icon('i-x', 'xs') : i + 1}</div>
+        <div class="step-label2">${esc(String(s.label ?? s.title ?? ''))}</div>
+        ${s.note || s.detail ? `<div class="step-note">${esc(String(s.note ?? s.detail))}</div>` : ''}
+      </div></div>`;
+  }).join('');
+  return el;
+}
+
+function ringsBlock(spec) {
+  const items = Array.isArray(spec) ? spec : (Array.isArray(spec.items) ? spec.items : Array.isArray(spec.rings) ? spec.rings : null);
+  if (!items || items.length < 1) return null;
+  const el = document.createElement('div');
+  el.className = 'rings';
+  el.innerHTML = items.slice(0, 6).map((it) => {
+    const max = it.max != null ? Number(it.max) : 100;
+    const val = Number(it.value ?? it.pct ?? 0);
+    const pct = it.pct != null ? Number(it.pct) : (max ? (val / max) * 100 : val);
+    const big = it.display != null ? String(it.display) : `${Math.round(pct)}%`;
+    return gaugeRingHtml(pct, it.label != null ? String(it.label) : '', big, it.unit || '', gaugeTone(pct, it), it.sub || it.note || '');
+  }).join('');
+  return el;
+}
+
+function badgesBlock(spec) {
+  const items = Array.isArray(spec) ? spec : (Array.isArray(spec.items) ? spec.items : Array.isArray(spec.badges) ? spec.badges : null);
+  if (!items || !items.length) return null;
+  const el = document.createElement('div');
+  el.className = 'badges';
+  el.innerHTML = items.map((it) => {
+    const obj = (it && typeof it === 'object') ? it : { label: String(it) };
+    const st = statusOf(String(obj.value ?? '')) || (obj.status ? { kind: String(obj.status).toLowerCase().replace('warn', 'warn'), label: '' } : null);
+    const kind = obj.tone || obj.status || (st ? st.kind : '');
+    const label = String(obj.label ?? obj.name ?? '');
+    const value = obj.value != null ? `<b>${esc(String(obj.value))}</b>` : '';
+    return `<span class="badge2 ${esc(String(kind || ''))}">${obj.icon ? icon(obj.icon, 'xs') : '<span class="b2-dot"></span>'}<span>${esc(label)}</span>${value}</span>`;
+  }).join('');
+  return el;
+}
+
+function mdInline(text) {
+  try { return DOMPurify.sanitize(marked.parseInline(String(text || ''), { gfm: true })); }
+  catch { return esc(String(text || '')); }
+}
+
+/* ── LaTeX math (```math block + inline $$…$$ / \(…\)) ──── */
+const KATEX_BASE = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/';
+let katexPromise = null;
+function loadKatex() {
+  if (window.katex) return Promise.resolve(true);
+  if (katexPromise) return katexPromise;
+  katexPromise = new Promise((resolve) => {
+    if (!document.querySelector('link[data-katex]')) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet'; link.href = KATEX_BASE + 'katex.min.css'; link.dataset.katex = '1';
+      document.head.appendChild(link);
+    }
+    const s = document.createElement('script');
+    s.src = KATEX_BASE + 'katex.min.js';
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+  return katexPromise;
+}
+
+function renderKatex(tex, display) {
+  try {
+    return window.katex.renderToString(tex, { displayMode: display, throwOnError: false, output: 'html' });
+  } catch {
+    return `<span class="katex-err">${esc(tex)}</span>`;
+  }
+}
+
+function mathBlock(text) {
+  const el = document.createElement('div');
+  el.className = 'katex-block';
+  el.dataset.tex = text;
+  if (window.katex) el.innerHTML = renderKatex(text, true);
+  else el.textContent = text;
+  return el;
+}
+
+function timelineBlock(text) {
+  const rows = text.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => l.split('|').map((x) => x.trim()));
+  if (!rows.length || rows.some((r) => r.length < 2)) return null;
+  const el = document.createElement('ol');
+  el.className = 'tl';
+  el.innerHTML = rows.map(([date, title, detail, status]) => {
+    const st = ['ok', 'warn', 'bad', 'info'].includes((status || '').toLowerCase()) ? status.toLowerCase() : (['ok', 'warn', 'bad', 'info'].includes((detail || '').toLowerCase()) ? detail.toLowerCase() : '');
+    const det = detail && !['ok', 'warn', 'bad', 'info'].includes(detail.toLowerCase()) ? detail : '';
+    return `<li class="tl-item ${st}"><span class="tl-dot"></span><div class="tl-date">${esc(date)}</div><div class="tl-title">${esc(title)}</div>${det ? `<div class="tl-detail">${esc(det)}</div>` : ''}</li>`;
+  }).join('');
+  return el;
 }
 
 // Shell replies are "```bash\n$ cmd\n```" + raw output + "*(Process exited with code N)*".
@@ -1885,7 +2778,7 @@ function setMsgAgent(msgEl, key, routed = false) {
 function addUserMessage(text, ts, attachments = []) {
   const el = document.createElement('div');
   el.className = 'msg user';
-  
+
   let attachHtml = '';
   if (attachments && attachments.length) {
     attachHtml = `<div class="msg-attachments">${attachments.map((att) => `
@@ -2009,7 +2902,7 @@ async function followRun(el, ctrl, schedule, open) {
       attached = true;
       el._reconnecting = false;
       const sid = res.headers.get('X-Session-ID');
-      if (sid && sid !== state.sessionId) { state.sessionId = sid; store.set('session', sid); }
+      if (sid && sid !== state.sessionId) { state.sessionId = sid; store.set('session', sid); api('/api/active-session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: sid }) }).catch(() => {}); }
       el._raw = '';                               // reattach replays the run from the start
       const reader = res.body.getReader();
       const dec = new TextDecoder();
@@ -2149,7 +3042,7 @@ async function send(textArg, opts = {}) {
   const input = $('#promptInput');
   const prompt = (textArg ?? input.value).trim();
   const attachments = [...(state.attachments || [])];
-  
+
   if (!prompt && !attachments.length) return null;
 
   // One reply at a time per conversation: don't pile a message onto a run that's still working.
@@ -2167,11 +3060,19 @@ async function send(textArg, opts = {}) {
   if (!state.messages.length) threadEl().innerHTML = '';
   const now = Date.now() / 1000;
   const agentKey = state.agent;
-  
+
   let enrichedPrompt = prompt;
   if (attachments.length) {
     const attachLines = attachments.map((a) => `- ${a.name} (${a.size_fmt || 'Media'}): ${a.path || a.url}`).join('\n');
     enrichedPrompt = `[Attached Media & Files from External Source]:\n${attachLines}\n\n${prompt || 'Please analyze the attached media/files.'}`;
+  }
+
+  const mentioned = findMentions(prompt);
+  if (mentioned.length) {
+    const lines = mentioned.map((m) => m.kind === 'Connector'
+      ? `- ${m.label} (mail connector): use the ${m.id === 'm365' ? 'outlook' : 'email'} MCP tools (mcp__${m.id === 'm365' ? 'outlook' : 'email'}__*)`
+      : `- ${m.label} (MCP server): use its tools (mcp__${m.id}__*)`).join('\n');
+    enrichedPrompt = `[User explicitly selected these integrations with @ — use them for this request]:\n${lines}\n\n${enrichedPrompt}`;
   }
 
   state.lastPromptLength = enrichedPrompt.length;
@@ -2183,6 +3084,7 @@ async function send(textArg, opts = {}) {
 
   const model = agentKey === 'bash' || agentKey === 'auto' ? null : currentModel(agentKey);
   const el = addAssistantMessage({ agent: agentKey, streaming: true, model });
+  if (opts.onEl) opts.onEl(el);
   state.stick = true;
   scrollToBottom(true);
   $('#jumpBtn').hidden = true;
@@ -2249,6 +3151,7 @@ async function openSession(id) {
     }));
     store.set('session', data.id);
     sessionStorage.setItem('ah.open', data.id);
+    api('/api/active-session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: data.id }) }).catch(() => {});
     if (AGENTS[data.agent]) setAgent(data.agent);
     if (data.workspace) { state.workspace = data.workspace; applyWorkspace(); }
 
@@ -2262,6 +3165,7 @@ async function openSession(id) {
     switchTab('chat');
     scrollToBottom(true);
     renderRail();
+    resetSyncCount();
 
     if (run.running) {           // the agent is still working in the background — pick up where it is
       const agentKey = AGENTS[run.agent] ? run.agent : state.agent;
@@ -2443,12 +3347,9 @@ const vc = {
   heard: false, cancelled: false, t0: 0, lastVoice: 0, floor: 0.008, wake: null, run: 0,
   muted: store.get('voiceMuted', false),
 };
-const vcFoot = () => 'Pause to send · tap the orb to interrupt';
+const vcFoot = () => (typeof live !== 'undefined' && live.on) ? liveFoot() : 'Pause to send · tap the orb to interrupt';
 const VC_LABEL = { idle: 'Tap to talk', listening: 'Listening…', thinking: 'Thinking…', speaking: 'Speaking…' };
-const hasTTS = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;   // fallback voice only
-
-// Replies are played through one reusable <audio> element. iOS only lets an element play once
-// it has been started by a tap, so voiceOpen() "unlocks" it; it then ignores the silent switch.
+// Replies are played through high-definition neural audio via <audio>.
 const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
 const ttsAudio = new Audio();
 ttsAudio.preload = 'auto';
@@ -2456,10 +3357,10 @@ ttsAudio.setAttribute('playsinline', '');
 
 function unlockAudio() {
   try {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     ttsAudio.src = SILENT_WAV;
     const p = ttsAudio.play();
     if (p && p.catch) p.catch(() => {});
-    if (hasTTS) speechSynthesis.speak(new SpeechSynthesisUtterance(''));   // unlocks the fallback too
   } catch { /* best effort */ }
 }
 
@@ -2475,6 +3376,7 @@ function vcPhase(phase, label) {
     }, 1000);
   }
   vc.phase = phase;
+  if (typeof vadSpeakingMode === 'function') vadSpeakingMode(phase === 'speaking');
   $('#orb').dataset.phase = phase;
   $('#voiceState').textContent = label || VC_LABEL[phase];
   $('#orb').setAttribute('aria-label', { idle: 'Talk', listening: 'Send now', thinking: 'Cancel', speaking: 'Interrupt and talk' }[phase]);
@@ -2532,7 +3434,11 @@ async function vcEnsureStream() {
 }
 
 async function voiceOpen() {
+  if (vc.open || vc.opening) return;                 // a second tap must not start a second conversation
+  vc.opening = true;
+  setTimeout(() => { vc.opening = false; }, 1500);
   unlockAudio();                                 // must happen synchronously inside the tap
+  if (typeof liveEngine === 'function' && liveEngine() === 'live') liveUnlock();
   if (document.activeElement && typeof document.activeElement.blur === 'function') {
     document.activeElement.blur();
   }
@@ -2559,15 +3465,24 @@ async function voiceOpen() {
   const a = AGENTS[state.agent] || AGENTS.antigravity;
   $('#voice').style.setProperty('--agent', a.color);
   $('#voiceAgent').textContent = currentModel(state.agent) ? agentLabel(state.agent, currentModel(state.agent)) : a.full;
+  syncVoiceLabel();
   $('#voiceYou').textContent = ''; $('#voiceReply').textContent = '';
   vcSyncMute();
   $('#voice').hidden = false;
+  if (typeof voiceEngineSync === 'function') voiceEngineSync();
+  if (typeof liveEngine === 'function' && liveEngine() === 'live') {
+    liveStart().then((ok) => { if (!ok && vc.open) liveFallback(); });
+    return;
+  }
   vcListen();
 }
 
 function voiceClose() {
   if (!vc.open) return;
   vc.open = false; vc.run++;
+  if (typeof liveStop === 'function') liveStop();
+  if (typeof vadDestroy === 'function') vadDestroy();
+  vcSpeechCancel();
   document.body.classList.remove('voice-mode');
   cancelAnimationFrame(vc.raf);
   if (vc.recorder && vc.recorder.state !== 'inactive') { vc.cancelled = true; try { vc.recorder.stop(); } catch { /* already stopped */ } }
@@ -2598,6 +3513,13 @@ async function vcListen() {
     toast('Microphone disconnected — tap to talk', 'err');
     return;
   }
+  // Voice-activity model (loads in the background the first time; until then the simple detector below is used).
+  if (typeof vadLoad === 'function') {
+    if (vadv.inst && vadv.stream !== vc.stream) await vadDestroy();          // the mic stream was replaced
+    if (!vadv.inst && !vadv.failed) { await Promise.race([vadLoad(), new Promise((r) => setTimeout(r, 2500))]); if (vadv.inst) vadv.stream = vc.stream; }
+    if (!vc.open) return;
+    if (vadv.inst && await vadListen()) return;
+  }
   vc.chunks = []; vc.heard = false; vc.cancelled = false;
   vc.t0 = vc.lastVoice = performance.now();
   vc.floor = 0.006;
@@ -2611,7 +3533,7 @@ async function vcListen() {
   const run = vc.run;
   vc.recorder.onstop = () => vcHandleAudio(run);
   try {
-    vc.recorder.start(250);
+    vc.recorder.start(100);
   } catch (e) {
     console.warn('MediaRecorder start error:', e);
     vc.stream = null;
@@ -2623,7 +3545,7 @@ async function vcListen() {
   if (vc.analyser) vcMeter(run);
 }
 
-// Level meter + voice-activity detection: stop ~1.3 s after you stop talking.
+// Level meter + voice-activity detection: stop ~0.8 s after you stop talking.
 function vcMeter(run) {
   if (!vc.analyser) return;
   const buf = new Uint8Array(vc.analyser.fftSize);
@@ -2639,7 +3561,7 @@ function vcMeter(run) {
     if (loud) { vc.heard = true; vc.lastVoice = now; }
     $('#orb').style.setProperty('--lvl', Math.min(1, rms * 10).toFixed(2));
 
-    if (vc.heard && now - vc.lastVoice > 1300) return vcStopListening();
+    if (vc.heard && now - vc.lastVoice > 800) return vcStopListening();
     if (!vc.heard && now - vc.t0 > 12000) { vc.cancelled = true; vcStopListening(); vcPhase('idle', 'Tap to talk'); return; }
     if (now - vc.t0 > 60000) return vcStopListening();
     vc.raf = requestAnimationFrame(tick);
@@ -2652,14 +3574,19 @@ function vcStopListening() {
   if (vc.recorder && vc.recorder.state !== 'inactive') vc.recorder.stop();   // → vcHandleAudio
 }
 
-async function vcHandleAudio(run) {
+async function vcHandleAudio(run, wavBlob, sttPromise) {
   if (!vc.open || run !== vc.run) return;
-  if (vc.cancelled) { if (vc.phase === 'listening') vcPhase('idle'); return; }
+  if (vc.cancelled && !wavBlob) { if (vc.phase === 'listening') vcPhase('idle'); return; }
   vcPhase('thinking', 'Transcribing…');
   let text = '';
+  if (sttPromise) {                                  // transcribed live while you were talking
+    const t = await Promise.race([sttPromise, new Promise((r) => setTimeout(() => r(null), 2500))]);
+    if (t) text = t.trim();
+  }
   try {
-    const mime = (vc.recorder && vc.recorder.mimeType) || 'audio/mp4';
-    const blob = new Blob(vc.chunks, { type: mime });
+    if (text) throw new Error('already transcribed');
+    const mime = wavBlob ? 'audio/wav' : ((vc.recorder && vc.recorder.mimeType) || 'audio/mp4');
+    const blob = wavBlob || new Blob(vc.chunks, { type: mime });
     if (blob.size < 200) { vcPhase('idle', 'Tap to talk'); return; }
     const fd = new FormData();
     const ext = mime.includes('mp4') ? 'mp4' : mime.includes('webm') ? 'webm' : 'wav';
@@ -2667,8 +3594,7 @@ async function vcHandleAudio(run) {
     const curAgent = state.agent || 'antigravity';
     text = ((await api(`/api/transcribe?agent=${encodeURIComponent(curAgent)}`, { method: 'POST', body: fd })).transcript || '').trim();
   } catch (e) {
-    console.error('Transcription error:', e);
-    toast('Transcription failed', 'err');
+    if (!text) { console.error('Transcription error:', e); toast('Transcription failed', 'err'); }
   }
   if (!vc.open || run !== vc.run) return;
   if (!text) { toast("Didn't catch that"); return vcListen(); }
@@ -2676,26 +3602,111 @@ async function vcHandleAudio(run) {
   $('#voiceYou').textContent = text;
   $('#voiceReply').textContent = '';
   vcPhase('thinking');
-  const res = await send(text, { voice: true });
-  if (!vc.open || run !== vc.run) return;
-  if (!res) return vcPhase('idle', 'Still working on the last one');
-  if (res.stopped) return vcPhase('idle');
-  if (res.failed) { toast(res.failed, 'err'); return vcPhase('idle'); }
+  vc.thinkStart = Date.now();
+  // Speak while the reply is still being written: each finished sentence is voiced right away.
+  const sp = vcSpeechStart(run);
+  let streamEl = null;
+  const pump = setInterval(() => { if (streamEl && streamEl._raw) sp.push(streamEl._raw, false); }, 120);
+  // A long task: every so often, while nothing is being said, reassure the user out loud.
+  const t0 = Date.now(), nudgeAt = [15, 40, 75, 120]; let nudged = 0;
+  const NUDGES = ['Still working on it.', 'Still on it. Thanks for waiting.', 'It is taking a little longer, but I am still on it.', 'Almost there, still working.'];
+  const nudge = setInterval(() => {
+    if (!vc.open || run !== vc.run || sp.cancelled || vc.muted) return;
+    if (nudged < nudgeAt.length && (Date.now() - t0) / 1000 >= nudgeAt[nudged] && vc.phase === 'thinking' && !sp.done) {
+      const phrase = NUDGES[nudged++];
+      const item = { text: phrase, p: ttsFetch(phrase) };
+      item.p.catch(() => {});
+      sp.items.push(item);
+      if (sp.wake) sp.wake();
+    }
+  }, 1000);
+  let res;
+  try { res = await send(text, { voice: true, onEl: (el) => { streamEl = el; } }); }
+  finally { clearInterval(pump); clearInterval(nudge); }
+  if (!vc.open || run !== vc.run) return vcSpeechCancel(sp);
+  if (!res) { vcSpeechCancel(sp); return vcPhase('idle', 'Still working on the last one'); }
+  if (res.stopped) { vcSpeechCancel(sp); return vcPhase('idle'); }
+  if (res.failed) { vcSpeechCancel(sp); toast(res.failed, 'err'); return vcPhase('idle'); }
 
-  const spoken = speakable(res.text);
-  $('#voiceReply').textContent = spoken.display;
+  $('#voiceReply').textContent = speakable(res.text).display;
   haptic(12);
-  if (vc.muted || !spoken.chunks.length) return vcListen();
-  vcSpeak(spoken.chunks, run);
+  sp.push(res.text, true);                       // flush the last sentence; the player returns to listening when it's done
+  if (vc.muted || !sp.items.length) { vcSpeechCancel(sp); return vcListen(); }
+}
+
+// Sentence queue for streamed replies. Audio for every sentence is requested as soon as the sentence
+// is complete, and played back to back, so speech starts after the first sentence, not the whole reply.
+function vcSpeechStart(run) {
+  vcSpeechCancel();
+  const sp = { run, queued: 0, items: [], done: false, cancelled: false, wake: null };
+  vc.sp = sp;
+  const LIMIT = 3;                                  // sentences read verbatim; anything longer gets a spoken summary
+  const enqueue = (text) => { const item = { text, p: ttsFetch(text) }; item.p.catch(() => {}); sp.items.push(item); };
+  const finish = () => { sp.done = true; if (sp.wake) sp.wake(); };
+  sp.push = (raw, final) => {
+    if (sp.cancelled || vc.muted || sp.summarizing) return;
+    const { chunks, display } = speakable(raw, { partial: !final });
+    for (; sp.queued < Math.min(chunks.length, LIMIT); sp.queued++) enqueue(chunks[sp.queued]);
+    if (!final) { if (sp.wake) sp.wake(); return; }
+    if (chunks.length > LIMIT) {
+      sp.summarizing = true;
+      fetch('/api/voice/summary', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: display, spoken: chunks.slice(0, LIMIT).join(' ') }) })
+        .then((r) => r.json())
+        .then((d) => enqueue((d && d.summary) || 'The rest is on screen.'))
+        .catch(() => enqueue('The rest is on screen.'))
+        .finally(finish);
+      return;
+    }
+    finish();
+  };
+  const live = () => vc.open && vc.sp === sp && !sp.cancelled && vc.run === run;
+  const idle = () => new Promise((r) => { sp.wake = () => { sp.wake = null; r(); }; });
+  (async () => {
+    for (let i = 0; live();) {
+      if (i >= sp.items.length) {
+        if (sp.done) break;
+        if (vc.phase === 'speaking') vcPhase('thinking');      // acknowledgement finished, the agent is still working
+        await idle(); continue;
+      }
+      const item = sp.items[i++];
+      let url;
+      try { url = await item.p; } catch {
+        // Server voice unavailable: wait for the full reply, then read the rest with the browser voice.
+        while (!sp.done && live()) await idle();
+        if (!live()) return;
+        const rest = sp.items.slice(i - 1).map((x) => x.text);
+        vcPhase('speaking');
+        if (hasTTS && rest.length) return vcSpeakFallback(rest, run);
+        toast('Could not play audio', 'err');
+        return vcListen();
+      }
+      if (!live()) { URL.revokeObjectURL(url); return; }
+      if (vc.phase !== 'speaking') vcPhase('speaking');
+      try { await playUrl(url); } catch (err) {
+        if (live()) toast(`Could not play audio (${(err && (err.name || err.message)) || 'unknown'})`, 'err');
+      } finally { URL.revokeObjectURL(url); }
+    }
+    if (live()) { vc.sp = null; vcListen(); }
+  })();
+  return sp;
+}
+
+function vcSpeechCancel(sp) {
+  const cur = sp || vc.sp;
+  if (!cur) return;
+  cur.cancelled = true;
+  if (cur.wake) cur.wake();
+  if (vc.sp === cur) vc.sp = null;
 }
 
 // Turn a markdown reply into short speakable chunks (sentences), skipping code and comments.
-function speakable(md) {
+function speakable(md, { partial = false } = {}) {
   let t = stripTag(md).text;
   t = (t || '')
     .replace(/<!--[\s\S]*?-->/g, '')     // strip complete HTML comments (including JSON containing '>')
     .replace(/<!--[\s\S]*$/g, '')        // strip in-flight partial comments
     .replace(/(~{3,}|`{3,})[\s\S]*?\1/g, ' (code omitted) ')
+    .replace(partial ? /(~{3,}|`{3,})[\s\S]*$/ : /(?!)/, ' ')     // a code block still being written
     .replace(/<[^>]+>/g, '')             // strip HTML tags
     .replace(/<[^>]*$/g, '')             // strip partial trailing tags
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
@@ -2708,10 +3719,13 @@ function speakable(md) {
     .replace(/[*_>#|~]/g, '')
     .replace(/(code omitted\)\s*)+/g, 'code omitted) ');
   const display = t.replace(/\n{3,}/g, '\n\n').trim();
-  let flat = t.split(/\n+/).map((l) => l.trim()).filter(Boolean).map((l) => (/[.!?:)]$/.test(l) ? l : l + '.')).join(' ');
+  // While streaming, the last line may be unfinished: leave its punctuation alone so we never speak half a sentence.
+  const lines = t.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  let flat = lines.map((l, i) => (partial && i === lines.length - 1) || /[.!?:)]$/.test(l) ? l : l + '.').join(' ');
   let cut = false;
   if (flat.length > 900) { flat = flat.slice(0, 900).replace(/[^.!?]*$/, '') || flat.slice(0, 900); cut = true; }
-  const chunks = (flat.match(/[^.!?]+[.!?]+["')\]]*\s*|[^.!?]+$/g) || []).map((c) => c.trim()).filter(Boolean);
+  const chunks = (flat.match(/.+?[.!?]+["')\]]*(?=\s|$)|.+$/g) || []).map((c) => c.trim()).filter(Boolean);
+  if (partial && !cut && chunks.length && !/[.!?]["')\]]*$/.test(flat)) chunks.pop();     // unfinished sentence
   if (cut) chunks.push('The rest is on screen.');
   return { chunks, display: display || '…' };
 }
@@ -2724,23 +3738,256 @@ function pickVoice() {
   return pool.find((v) => /premium|enhanced|natural|neural|google|samantha|daniel|karen/i.test(v.name)) || pool.find((v) => v.lang.toLowerCase() === lang) || pool[0] || null;
 }
 
-function ttsFetch(text, agent = state.agent) {
-  return fetch('/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, agent }) })
+let cachedVoiceCatalog = null;
+
+async function loadVoiceCatalog() {
+  if (cachedVoiceCatalog) return cachedVoiceCatalog;
+  try {
+    const data = await api('/api/tts/voices');
+    cachedVoiceCatalog = data?.voices || [];
+    return cachedVoiceCatalog;
+  } catch {
+    return [];
+  }
+}
+
+let activeVoiceTab = 'antigravity';
+
+function getAgentDefaultVoice(agent) {
+  if (agent === 'antigravity') return 'en-US-ChristopherNeural';
+  if (agent === 'claude') return 'en-US-AriaNeural';
+  if (agent === 'regina') return 'en-US-AriaNeural';
+  if (agent === 'codex') return 'en-US-EricNeural';
+  return 'en-US-JennyNeural';
+}
+
+function getAgentVoice(agent) {
+  const ag = (agent || state.agent || 'antigravity').toLowerCase();
+  const override = store.get('agent_voice_' + ag);
+  if (override) return override;
+  const globalPref = store.get('preferredVoice');
+  if (globalPref) return globalPref;
+  return getAgentDefaultVoice(ag);
+}
+
+function setAgentVoice(agent, voiceId) {
+  const ag = (agent || 'all').toLowerCase();
+  if (ag === 'all') {
+    if (voiceId) {
+      store.set('preferredVoice', voiceId);
+    } else {
+      store.remove('preferredVoice');
+    }
+  } else {
+    if (voiceId) {
+      store.set('agent_voice_' + ag, voiceId);
+    } else {
+      store.remove('agent_voice_' + ag);
+    }
+  }
+  syncVoiceLabel();
+}
+
+function syncVoiceLabel() {
+  const vId = getAgentVoice(state.agent);
+  const short = vId.split('-')[2]?.replace('Neural', '').replace('Expressive', '') || 'Voice';
+
+  const label = $('#voiceName');
+  if (label) label.textContent = short;
+
+  const setSub = $('#setVoiceSub');
+  if (setSub) setSub.textContent = `${short} (Neural Human)`;
+}
+
+function ttsFetch(text, agent = state.agent, voiceOverride = null) {
+  const voice = voiceOverride || getAgentVoice(agent) || '';
+  return fetch('/api/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, agent, voice })
+  })
     .then((r) => { if (!r.ok) throw new Error(`TTS ${r.status}`); return r.blob(); })
     .then((b) => URL.createObjectURL(b));
 }
 
-// Play one audio URL; resolves when it ends, errors or is paused (interrupt).
+async function openVoicePickerSheet(targetAgent = null) {
+  openSheet(`<div class="file-loading">Loading neural voices…</div>`);
+  const voices = await loadVoiceCatalog();
+  if (targetAgent && ['antigravity', 'claude', 'codex', 'regina', 'all'].includes(targetAgent)) {
+    activeVoiceTab = targetAgent;
+  } else if (!activeVoiceTab) {
+    activeVoiceTab = state.agent || 'antigravity';
+  }
+
+  const renderSheetContent = () => {
+    const isAll = activeVoiceTab === 'all';
+    const currentVoice = isAll ? (store.get('preferredVoice') || '') : getAgentVoice(activeVoiceTab);
+    const defaultVoice = isAll ? 'en-US-JennyNeural' : getAgentDefaultVoice(activeVoiceTab);
+    const hasCustom = isAll ? !!store.get('preferredVoice') : !!store.get('agent_voice_' + activeVoiceTab);
+
+    return `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <h3 style="margin:0;">Agent Voice Settings</h3>
+        <button class="icon-btn" data-sheet="cancel">${icon('i-x')}</button>
+      </div>
+      <p class="lead" style="margin-bottom:12px;">Choose human-like neural voices for each AI assistant.</p>
+
+      <!-- Agent Selection Tabs -->
+      <div class="segmented" style="display:flex; width:100%; margin-bottom:14px; background:var(--surface-1); padding:3px; border-radius:12px; border:1px solid var(--line);">
+        <button type="button" class="btn btn-sm ${activeVoiceTab === 'antigravity' ? 'btn-primary' : 'btn-ghost'}" data-voice-tab="antigravity" style="flex:1; font-size:12.5px; padding:6px 0;">🔵 Antigravity</button>
+        <button type="button" class="btn btn-sm ${activeVoiceTab === 'claude' ? 'btn-primary' : 'btn-ghost'}" data-voice-tab="claude" style="flex:1; font-size:12.5px; padding:6px 0;">🟣 Claude</button>
+        <button type="button" class="btn btn-sm ${activeVoiceTab === 'regina' ? 'btn-primary' : 'btn-ghost'}" data-voice-tab="regina" style="flex:1; font-size:12.5px; padding:6px 0;">🌸 Regina</button>
+        <button type="button" class="btn btn-sm ${activeVoiceTab === 'codex' ? 'btn-primary' : 'btn-ghost'}" data-voice-tab="codex" style="flex:1; font-size:12.5px; padding:6px 0;">🟢 Codex</button>
+        <button type="button" class="btn btn-sm ${activeVoiceTab === 'all' ? 'btn-primary' : 'btn-ghost'}" data-voice-tab="all" style="flex:1; font-size:12.5px; padding:6px 0;">🌐 All</button>
+      </div>
+
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <span style="font-size:12.5px; color:var(--text-2); font-weight:600;">
+          ${activeVoiceTab === 'all' ? 'Default Voice for All Agents' : `Voice for ${AGENTS[activeVoiceTab]?.full || activeVoiceTab}`}
+        </span>
+        ${hasCustom ? `
+          <button type="button" class="btn btn-ghost btn-sm" id="btnResetVoice" style="font-size:11.5px; color:#60a5fa; padding:2px 8px;">
+            ${icon('i-refresh', 'xs')} Reset to Provider Default
+          </button>` : ''}
+      </div>
+
+      <!-- Voice List -->
+      <div class="stack" style="gap:8px; max-height:55vh; overflow-y:auto; padding-right:2px;">
+        ${voices.map(v => {
+          const isSel = (currentVoice === v.id);
+          const isAgentDef = (defaultVoice === v.id);
+          const flag = v.accent === 'UK' ? '🇬🇧' : v.accent === 'IN' ? '🇮🇳' : '🇺🇸';
+          return `
+          <div class="opt ${isSel ? 'active' : ''}" data-pick-voice="${esc(v.id)}" style="display:flex; align-items:center; justify-content:space-between; cursor:pointer; padding:11px 13px; border-radius:12px; border:1px solid ${isSel ? 'var(--accent)' : 'var(--line)'}; background:${isSel ? 'rgba(124, 140, 255, 0.08)' : 'var(--surface-1)'};">
+            <div style="display:flex; align-items:center; gap:11px; min-width:0;">
+              <div style="width:36px; height:36px; border-radius:18px; background:var(--surface-2); display:grid; place-items:center; font-size:17px; flex:none;">
+                ${v.gender === 'Female' ? '👩' : '👨'}
+              </div>
+              <div style="min-width:0;">
+                <div style="font-weight:600; font-size:14.5px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                  <span>${esc(v.name)}</span>
+                  <span style="font-size:10.5px; padding:1px 5px; border-radius:6px; background:var(--surface-3); color:var(--text-2); font-weight:500;">${flag} ${esc(v.accent)}</span>
+                  ${isAgentDef ? `<span style="font-size:10.5px; padding:1px 6px; border-radius:6px; background:rgba(96, 165, 250, 0.15); color:#60a5fa; font-weight:600;">Provider Default</span>` : ''}
+                </div>
+                <div style="font-size:12px; color:var(--text-3); margin-top:2px;">${esc(v.style)}</div>
+              </div>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px; flex:none;">
+              <button class="btn btn-ghost btn-sm" data-preview-voice="${esc(v.id)}" style="padding:5px 9px; font-size:11.5px; gap:3px;" title="Listen to preview">
+                ${icon('i-volume', 'xs')} Preview
+              </button>
+              ${isSel ? `<span style="color:var(--accent);">${icon('i-check')}</span>` : ''}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    `;
+  };
+
+  openSheet(renderSheetContent(), (body) => {
+    const bindSheetEvents = () => {
+      // Tab switching
+      $$('[data-voice-tab]', body).forEach(tabBtn => {
+        tabBtn.addEventListener('click', (e) => {
+          activeVoiceTab = tabBtn.dataset.voiceTab;
+          body.innerHTML = renderSheetContent();
+          bindSheetEvents();
+        });
+      });
+
+      // Reset to provider default
+      $('#btnResetVoice', body)?.addEventListener('click', (e) => {
+        setAgentVoice(activeVoiceTab, null);
+        toast(`Reset ${activeVoiceTab} to provider default voice`, 'ok');
+        body.innerHTML = renderSheetContent();
+        bindSheetEvents();
+      });
+
+      // Preview audio
+      $$('[data-preview-voice]', body).forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const vId = btn.dataset.previewVoice;
+          btn.disabled = true;
+          const orig = btn.innerHTML;
+          btn.innerHTML = 'Speaking…';
+          try {
+            unlockAudio();
+            const sample = "Hello! I am speaking with a natural human neural voice. How do I sound?";
+            const url = await ttsFetch(sample, activeVoiceTab === 'all' ? state.agent : activeVoiceTab, vId);
+            await playUrl(url);
+            URL.revokeObjectURL(url);
+          } catch (err) {
+            toast('Preview failed: ' + err.message, 'err');
+          } finally {
+            btn.disabled = false;
+            btn.innerHTML = orig;
+          }
+        });
+      });
+
+      // Select voice
+      $$('[data-pick-voice]', body).forEach(card => {
+        card.addEventListener('click', (e) => {
+          if (e.target.closest('[data-preview-voice]')) return;
+          const vId = card.dataset.pickVoice;
+          setAgentVoice(activeVoiceTab, vId);
+          const vName = card.querySelector('span')?.textContent || 'selected voice';
+          const targetName = activeVoiceTab === 'all' ? 'all agents' : (AGENTS[activeVoiceTab]?.full || activeVoiceTab);
+          toast(`Set ${targetName} voice to ${vName}`, 'ok');
+          body.innerHTML = renderSheetContent();
+          bindSheetEvents();
+        });
+      });
+    };
+
+    bindSheetEvents();
+  });
+}
+
+let isUserInterrupt = false;
+
+// Play one audio URL; resolves when it ends or errors.
 function playUrl(url) {
-  return new Promise((resolve, reject) => {
-    const done = (err) => { ttsAudio.removeEventListener('ended', onEnd); ttsAudio.removeEventListener('pause', onEnd); ttsAudio.removeEventListener('error', onErr); err ? reject(err) : resolve(); };
-    const onEnd = () => done();
-    const onErr = () => done(new Error('audio error'));
+  return new Promise((resolve) => {
+    isUserInterrupt = false;
+    let finished = false;
+    const cleanup = () => {
+      if (finished) return;
+      finished = true;
+      ttsAudio.removeEventListener('ended', onEnd);
+      ttsAudio.removeEventListener('error', onErr);
+      resolve();
+    };
+    const onEnd = () => cleanup();
+    const onErr = (e) => {
+      console.warn('Audio playback error', e);
+      cleanup();
+    };
+
     ttsAudio.addEventListener('ended', onEnd);
-    ttsAudio.addEventListener('pause', onEnd);
     ttsAudio.addEventListener('error', onErr);
     ttsAudio.src = url;
-    ttsAudio.play().catch(done);
+
+    if ('mediaSession' in navigator) {
+      try {
+        const vName = getAgentVoice(state.agent).split('-')[2]?.replace('Neural','').replace('Expressive','') || 'Voice';
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: 'Spoken Agent Reply',
+          artist: AGENTS[state.agent]?.full || 'AgentHub',
+          album: `${vName} Neural Speech`
+        });
+      } catch {}
+    }
+
+    const p = ttsAudio.play();
+    if (p && p.catch) {
+      p.catch((err) => {
+        // If paused by OS backgrounding, don't break - let it resolve cleanly
+        console.warn('Playback notice:', err?.message || err);
+        cleanup();
+      });
+    }
   });
 }
 
@@ -2761,8 +4008,9 @@ async function testVoice() {
 }
 
 function stopSpeaking() {
+  isUserInterrupt = true;
   try { ttsAudio.pause(); } catch { /* ignore */ }
-  if (hasTTS) speechSynthesis.cancel();
+  try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); } catch { /* ignore */ }
 }
 
 async function vcSpeak(chunks, run) {
@@ -2770,38 +4018,25 @@ async function vcSpeak(chunks, run) {
   const live = () => vc.open && run === vc.run && vc.phase === 'speaking';
   let pending = ttsFetch(chunks[0]);
   try {
-    for (let i = 0; i < chunks.length && live(); i++) {
+    for (let i = 0; i < chunks.length && live() && !isUserInterrupt; i++) {
       const url = await pending;
-      pending = i + 1 < chunks.length ? ttsFetch(chunks[i + 1]) : null;   // synthesise the next sentence while this one plays
-      pending && pending.catch(() => {});
-      if (!live()) { URL.revokeObjectURL(url); break; }
-      try { await playUrl(url); } finally { URL.revokeObjectURL(url); }
+      pending = i + 1 < chunks.length ? ttsFetch(chunks[i + 1]) : null;
+      if (!live() || isUserInterrupt) { URL.revokeObjectURL(url); break; }
+      try {
+        await playUrl(url);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
     }
   } catch (err) {
-    if (!live()) return;
-    if (hasTTS) return vcSpeakFallback(chunks, run);        // server voice unavailable → browser voice
-    toast(`Could not play audio (${err && (err.name || err.message) || 'unknown'})`, 'err');
+    console.warn('vcSpeak error:', err);
   }
-  if (live()) vcListen();
-}
-
-function vcSpeakFallback(chunks, run) {
-  speechSynthesis.cancel();
-  const voice = pickVoice();
-  let i = 0;
-  const next = () => {
-    if (!vc.open || run !== vc.run || vc.phase !== 'speaking') return;
-    if (i >= chunks.length) return vcListen();
-    const u = new SpeechSynthesisUtterance(chunks[i++]);
-    if (voice) { u.voice = voice; u.lang = voice.lang; }
-    u.onend = next; u.onerror = next;
-    speechSynthesis.speak(u);
-  };
-  next();
+  if (live() && !isUserInterrupt) vcListen();
 }
 
 async function vcOrbTap() {
   unlockAudio();
+  if (typeof liveEngine === 'function' && liveEngine() === 'live') { liveUnlock(); return liveOrbTap(); }
   haptic(10);
   if (vc.phase === 'idle') {
     const ok = await vcEnsureStream();
@@ -2811,14 +4046,19 @@ async function vcOrbTap() {
     }
     vcListen();
   } else if (vc.phase === 'listening') {
+    if (typeof vadSendNow === 'function' && vadSendNow()) return;
     vc.heard = true;
     vc.cancelled = false;
     vcStopListening();
   } else if (vc.phase === 'thinking') {
     vc.run++;
+    vcSpeechCancel();
     if (state.streaming) stopStreaming();
     vcPhase('idle', 'Tap to talk');
   } else if (vc.phase === 'speaking') {
+    vc.run++;                                    // drop anything still queued or streaming
+    vcSpeechCancel();
+    if (state.streaming) stopStreaming();
     stopSpeaking();
     const ok = await vcEnsureStream();
     if (ok) vcListen();
@@ -2850,6 +4090,7 @@ function openTerminal() {
     term.loadAddon(fit);
     term.open($('#terminal-view'));
     term.onData(onTermData);
+    term.attachCustomKeyEventHandler(termClipboardKeys);
     term.onResize(({ rows, cols }) => sendTerm(`__RESIZE__:${rows}:${cols}`));
     new ResizeObserver(() => { try { if (state.tab === 'terminal') fit.fit(); } catch { /* hidden */ } }).observe($('#terminal-view'));
   }
@@ -2884,6 +4125,101 @@ function onTermData(data) {
   sendTerm(data);
 }
 
+// Copy: Ctrl/Cmd+Shift+C, Cmd+C, or Ctrl+C while text is selected (otherwise ^C
+// still interrupts). Paste: Ctrl/Cmd+V and Ctrl+Shift+V fall through to the
+// browser's native paste event, which xterm turns into a (bracketed) paste.
+function termClipboardKeys(e) {
+  if (e.type !== 'keydown') return true;
+  const k = e.key.toLowerCase();
+  const mod = e.ctrlKey || e.metaKey;
+  if (!mod || e.altKey) return true;
+  if (k === 'c' && (e.shiftKey || e.metaKey || term.hasSelection())) {
+    e.preventDefault();
+    termCopy();
+    return false;
+  }
+  if (k === 'v') return false;
+  return true;
+}
+
+async function termCopy() {
+  if (!term) return;
+  if (!term.hasSelection()) { termSelectSheet(); return; }
+  const ok = await copyText(term.getSelection());
+  term.clearSelection();
+  toast(ok ? 'Copied' : 'Copy failed', ok ? 'ok' : 'err');
+  term.focus();
+}
+
+async function termPaste() {
+  if (!term) return;
+  try {
+    if (navigator.clipboard && navigator.clipboard.readText && window.isSecureContext) {
+      const text = await navigator.clipboard.readText();
+      if (text) { term.paste(text); term.focus(); return; }
+    }
+  } catch { /* permission denied — fall back to a paste box */ }
+  termPasteSheet();
+}
+
+// Phones can't select text on xterm's canvas, so show the buffer as plain text
+// where the OS's long-press selection works.
+function termBufferText(maxLines = 2000) {
+  const buf = term.buffer.active;
+  const lines = [];
+  for (let i = Math.max(0, buf.length - maxLines); i < buf.length; i++) {
+    const line = buf.getLine(i);
+    if (!line) continue;
+    const s = line.translateToString(true);
+    if (line.isWrapped && lines.length) lines[lines.length - 1] += s;
+    else lines.push(s);
+  }
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  return lines.join('\n');
+}
+
+function termSelectSheet() {
+  openSheet(`
+    <h3>Copy from terminal</h3>
+    <p class="lead">Long-press or drag to select, then copy — or copy everything.</p>
+    <textarea id="termCopyText" class="sheet-input term-clip" readonly spellcheck="false"></textarea>
+    <div class="sheet-actions">
+      <button class="btn" data-sheet="cancel">Close</button>
+      <button class="btn" data-term-copy-sel>Copy selection</button>
+      <button class="btn btn-primary" data-term-copy-all>Copy all</button>
+    </div>`, (body) => {
+    const ta = body.querySelector('#termCopyText');
+    ta.value = termBufferText();
+    ta.scrollTop = ta.scrollHeight;
+    const done = async (text) => {
+      const ok = text && await copyText(text);
+      toast(ok ? 'Copied' : text ? 'Copy failed' : 'Nothing selected', ok ? 'ok' : 'err');
+      if (ok) closeSheet();
+    };
+    body.querySelector('[data-term-copy-sel]').addEventListener('click', () => done(ta.value.slice(ta.selectionStart, ta.selectionEnd)));
+    body.querySelector('[data-term-copy-all]').addEventListener('click', () => done(ta.value));
+  }, { full: true });
+}
+
+function termPasteSheet() {
+  openSheet(`
+    <h3>Paste into terminal</h3>
+    <p class="lead">Paste (long-press → Paste) or type below, then send.</p>
+    <textarea id="termPasteText" class="sheet-input term-clip" autocomplete="off" autocapitalize="off" spellcheck="false" autofocus></textarea>
+    <div class="sheet-actions">
+      <button class="btn" data-sheet="cancel">Cancel</button>
+      <button class="btn btn-primary" data-term-paste-ok>Send</button>
+    </div>`, (body) => {
+    const ta = body.querySelector('#termPasteText');
+    body.querySelector('[data-term-paste-ok]').addEventListener('click', () => {
+      const v = ta.value;
+      closeSheet();
+      if (v) { term.paste(v); term.focus(); }
+    });
+    ta.focus();
+  });
+}
+
 function setCtrl(on) {
   ctrlOn = on;
   $('#ctrlKey').classList.toggle('on', on);
@@ -2894,6 +4230,8 @@ const KEYS = { esc: '\x1b', tab: '\t', '^C': '\x03', '^D': '\x04', up: '\x1b[A',
 function pressKey(k) {
   haptic(5);
   if (k === 'ctrl') return setCtrl(!ctrlOn);
+  if (k === 'copy') return termCopy();
+  if (k === 'paste') return termPaste();
   let data = KEYS[k] ?? k;
   if (ctrlOn && data.length === 1) { onTermData(data); return; }
   sendTerm(data);
@@ -2968,14 +4306,6 @@ async function pollUsage() {
     }
   } catch {
     /* ignore usage poll error */
-  const mentioned = findMentions(prompt);
-  if (mentioned.length) {
-    const lines = mentioned.map((m) => m.kind === 'Connector'
-      ? `- ${m.label} (mail connector): use the ${m.id === 'm365' ? 'outlook' : 'email'} MCP tools (mcp__${m.id === 'm365' ? 'outlook' : 'email'}__*)`
-      : `- ${m.label} (MCP server): use its tools (mcp__${m.id}__*)`).join('\n');
-    enrichedPrompt = `[User explicitly selected these integrations with @ — use them for this request]:\n${lines}\n\n${enrichedPrompt}`;
-  }
-
   }
 }
 
@@ -3119,10 +4449,11 @@ function renderRail() {
   else if (state.groupBy === 'folder') {
     body = groupByFolder(rest).slice(0, 8).map((g) => {
       const open = state.expandedWs.has(g.ws);
+      const collapsed = state.collapsedRailWs.has(g.ws);
       return `<div class="rail-folder">
-        <div class="rail-section-title folder" title="${esc(g.ws)}">${icon('i-folder', 'xs')}<span>${esc(g.ws ? basename(g.ws) : 'No folder')}</span><span class="rail-count">${g.items.length}</span></div>
-        ${(open ? g.items : g.items.slice(0, 4)).map(row).join('')}
-        ${g.items.length > 4 ? `<button class="rail-more" data-expand-ws="${esc(g.ws)}">${open ? 'Show fewer' : `${g.items.length - 4} more`}</button>` : ''}
+        <button class="rail-section-title folder rail-folder-toggle" data-toggle-rail-folder="${esc(g.ws)}" aria-expanded="${!collapsed}" title="${esc(g.ws)}">${icon('i-chevron', 'xs rail-folder-chevron')}${icon('i-folder', 'xs')}<span>${esc(g.ws ? basename(g.ws) : 'No folder')}</span><span class="rail-count">${g.items.length}</span></button>
+        ${collapsed ? '' : (open ? g.items : g.items.slice(0, 4)).map(row).join('')}
+        ${!collapsed && g.items.length > 4 ? `<button class="rail-more" data-expand-ws="${esc(g.ws)}">${open ? 'Show fewer' : `${g.items.length - 4} more`}</button>` : ''}
       </div>`;
     }).join('');
   } else body = rest.slice(0, 14).map(row).join('');
@@ -3351,6 +4682,7 @@ function newChatSilently() {
 
 function refreshSettings() {
   $('#setOrigin').textContent = location.origin;
+  if ($('#setOrigin')) $('#setOrigin').dataset.copy = location.origin;
   $('#setWsSub').textContent = state.workspace;
   if ($('#pref5hBudget')) $('#pref5hBudget').value = state.prefs.fiveHourBudget || 200000;
   if ($('#prefWeeklyBudget')) $('#prefWeeklyBudget').value = state.prefs.weeklyBudget || 1500000;
@@ -3372,13 +4704,28 @@ async function checkTunnel() {
     setConn(true);
   } catch { setConn(false); return; }
   const btn = $('#tunnelBtn');
-  $('#tunnelSub').textContent = state.tunnel.active ? state.tunnel.url.replace(/^https?:\/\//, '') : 'Not running';
-  $('#tunnelSub').dataset.copy = state.tunnel.active ? state.tunnel.url : '';
+  // The canonical secure address is the single origin every device must use.
+  // localStorage/sessionStorage are per-origin, so opening a different address
+  // (a raw IP, or a rotating trycloudflare link) creates a separate isolated app.
+  const canonical = state.tunnel.url || '';
+  const onCanonical = canonical && location.origin === canonical;
+  $('#tunnelSub').textContent = canonical ? canonical.replace(/^https?:\/\//, '') : 'Not running';
+  $('#tunnelSub').dataset.copy = canonical;
   btn.textContent = state.tunnel.active ? 'Stop' : 'Start';
   btn.classList.toggle('btn-danger', state.tunnel.active);
+
+  // Show the device-mismatch banner whenever this device is not on the one
+  // canonical HTTPS origin (covers http, raw IP, and tunnel URLs alike).
   const insecureRemote = location.protocol === 'http:' && !['localhost', '127.0.0.1'].includes(location.hostname);
-  $('#httpsBanner').hidden = !(state.tunnel.active && insecureRemote);
-  if (state.tunnel.active) $('#httpsLink').href = state.tunnel.url;
+  const mismatch = !!canonical && !onCanonical;
+  const banner = $('#httpsBanner');
+  banner.hidden = !(insecureRemote || mismatch);
+  if (canonical) $('#httpsLink').href = canonical;
+  if ($('#httpsBannerText')) {
+    $('#httpsBannerText').textContent = mismatch
+      ? 'You are on a different address — open the secure link so this device shares conversations.'
+      : 'Voice input needs HTTPS on this device.';
+  }
 }
 
 async function toggleTunnel() {
@@ -3630,7 +4977,7 @@ function openMcpCreator({ name = '', command = '', args = [], env = {} } = {}) {
       const mArgsRaw = $('#mcpInputArgs', body).value.trim();
       const mEnvRaw = $('#mcpInputEnv', body).value.trim();
       if (!mName || !mCmd) { toast('Name and command are required', 'err'); return; }
-      
+
       let parsedArgs = [];
       if (mArgsRaw.startsWith('[')) {
         try { parsedArgs = JSON.parse(mArgsRaw); } catch { parsedArgs = mArgsRaw.split(/\s+/); }
@@ -3680,6 +5027,70 @@ function openMcpAiGenerator() {
         e.target.textContent = 'Generate Config';
       }
     });
+  });
+}
+
+async function openConnectorsSheet() {
+  const badge = (c) => {
+    const m = { ready: ['#34d399', 'Connected'], error: ['#fbbf24', 'Needs attention'], unauthenticated: ['#f87171', 'Not connected'] }[c.status] || ['#f87171', c.status];
+    return `<span style="font-size:11.5px; font-weight:600; color:${m[0]};">● ${m[1]}</span>`;
+  };
+  openSheet(`
+    <h3 style="margin:0 0 4px;">Connectors</h3>
+    <p class="lead">Mail accounts agents can search and read via the <span class="mono">search_emails</span> / <span class="mono">read_email</span> tools.</p>
+    <div id="connList" style="margin-top:12px; display:flex; flex-direction:column; gap:10px;">
+      <div style="text-align:center; padding:16px; color:var(--text-2);">Checking connections…</div>
+    </div>
+  `, async (body) => {
+    const cont = $('#connList', body);
+    const renderMsgs = (box, msgs) => {
+      box.style.display = 'block';
+      const errs = msgs.filter(m => m.error);
+      if (errs.length) { box.innerHTML = `<span style="color:#fbbf24;">${esc(errs[0].error)}</span>`; return; }
+      box.innerHTML = msgs.length ? msgs.map(m => `
+        <div style="padding:6px 0; border-top:1px solid var(--line);">
+          <div style="font-weight:600; font-size:13px;">${esc(m.subject || '(No Subject)')}</div>
+          <div style="font-size:12px; color:var(--text-2);">${esc(m.from || '')} · ${esc((m.date || '').slice(0, 16))}</div>
+        </div>`).join('') : '<span style="color:var(--text-2);">No messages found.</span>';
+    };
+    const draw = (items) => {
+      cont.innerHTML = items.map(c => `
+        <div class="card" style="padding:12px 14px; display:flex; flex-direction:column; gap:8px; background:var(--surface-1); border:1px solid var(--line); border-radius:12px;" data-conn="${esc(c.id)}">
+          <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px;">
+            <div style="font-weight:650; font-size:14px;">${esc(c.label)}</div>${badge(c)}
+          </div>
+          <div class="mono" style="font-size:12px; color:var(--text-2);">${esc(c.account || '')}</div>
+          ${c.error ? `<div style="font-size:12px; color:#fbbf24;">${esc(c.error)}${c.id === 'm365' ? '<br>Needs an Azure app registration with Mail.Read.' : ''}</div>` : ''}
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <input type="search" placeholder="Search mail (blank = latest)" data-conn-q style="flex:1; min-width:140px; height:32px; border-radius:8px; background:var(--surface-2); border:1px solid var(--line-strong); color:var(--text); padding:0 10px; font-size:13px; outline:none;">
+            <button class="btn btn-sm" data-conn-search>Search</button>
+            <button class="btn btn-sm btn-ghost" data-conn-test>Test</button>
+          </div>
+          <div data-conn-out style="display:none; font-size:12.5px;"></div>
+        </div>`).join('');
+      $$('[data-conn]', cont).forEach(card => {
+        const id = card.dataset.conn;
+        const out = $('[data-conn-out]', card);
+        const q = $('[data-conn-q]', card);
+        const search = async () => {
+          out.style.display = 'block'; out.textContent = 'Searching…';
+          try { renderMsgs(out, (await api(`/api/connectors/${id}/messages?q=${encodeURIComponent(q.value)}&limit=6`)).messages || []); }
+          catch (e) { out.textContent = 'Search failed: ' + e.message; }
+        };
+        $('[data-conn-search]', card).addEventListener('click', search);
+        q.addEventListener('keydown', (e) => { if (e.key === 'Enter') search(); });
+        $('[data-conn-test]', card).addEventListener('click', async (e) => {
+          e.target.disabled = true;
+          try {
+            const r = await api(`/api/connectors/${id}/test`, { method: 'POST' });
+            toast(`${r.label}: ${r.status === 'ready' ? 'connected' : (r.error || r.status)}`, r.status === 'ready' ? 'info' : 'err');
+            const i = items.findIndex(x => x.id === id); items[i] = r; draw(items);
+          } catch (err) { toast('Test failed: ' + err.message, 'err'); e.target.disabled = false; }
+        });
+      });
+    };
+    try { draw((await api('/api/connectors')).connectors || []); }
+    catch (e) { cont.innerHTML = `<div style="color:#f87171;">Could not load connectors: ${esc(e.message)}</div>`; }
   });
 }
 
@@ -3887,14 +5298,152 @@ function openVaultCreator({ service = '', name = '', username = '', password = '
   });
 }
 
+let lastGeoSync = 0;
+async function syncBrowserLocation(force = false) {
+  if (!('geolocation' in navigator)) return;
+  const now = Date.now();
+  if (!force && now - lastGeoSync < 60000) return;
+
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      lastGeoSync = Date.now();
+      try {
+        const { latitude, longitude, accuracy } = pos.coords;
+        const res = await api('/api/location/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ latitude, longitude, accuracy, force })
+        });
+        const sub = $('#setLocationSub');
+        if (sub && res.location) {
+          const acc = accuracy ? ` (±${Math.round(accuracy)}m)` : '';
+          sub.textContent = `${res.location.city || res.location.name || 'Synced'}${acc}`;
+        }
+        if (force) {
+          toast(`Location updated: ${res.location?.city || res.location?.name || 'Synced'}`);
+        }
+      } catch (e) {
+        console.warn('Location sync failed:', e);
+        if (force) toast(`Location sync failed: ${e.message}`, 'err');
+      }
+    },
+    (err) => {
+      if (force) toast(`Geolocation access denied: ${err.message}`, 'err');
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+  );
+}
+
+async function updateLocationSub() {
+  try {
+    const loc = await api('/api/location');
+    const sub = $('#setLocationSub');
+    if (sub && loc) {
+      const acc = loc.accuracy_m ? ` (±${Math.round(loc.accuracy_m)}m)` : '';
+      sub.textContent = `${loc.city || loc.name || 'Synced'}${acc}`;
+    }
+  } catch {}
+}
+
+async function openLocationSheet() {
+  openSheet(`
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <h3 style="margin:0;">Live Location & Travel</h3>
+      <button class="btn btn-primary btn-sm" id="btnSyncGps" style="display:inline-flex; align-items:center; gap:4px;">${icon('i-globe', 'xs')} Sync GPS Now</button>
+    </div>
+    <p class="lead">Shared travel context across all agents. Automatically tracks your browser's live GPS location.</p>
+    <div id="locationCardContainer" style="margin-top:12px; display:flex; flex-direction:column; gap:10px;">
+      <div style="text-align:center; padding:16px; color:var(--text-2);">Loading location…</div>
+    </div>
+  `, async (body) => {
+    const cont = $('#locationCardContainer', body);
+    const renderCard = (loc) => {
+      if (!cont) return;
+      const acc = loc.accuracy_m ? ` · ±${Math.round(loc.accuracy_m)}m accuracy` : '';
+      cont.innerHTML = `
+        <div class="card" style="padding:14px; background:var(--surface-1); border:1px solid var(--line); border-radius:12px; display:flex; flex-direction:column; gap:8px;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline;">
+            <div style="font-weight:700; font-size:15px; color:var(--text);">${esc(loc.name || loc.city || 'Current Location')}</div>
+            <span style="font-size:11px; padding:2px 8px; border-radius:12px; background:rgba(52, 211, 153, 0.15); color:#34d399; font-weight:600;">Active</span>
+          </div>
+          <div style="font-size:13px; color:var(--text-2); line-height:1.4;">${esc(loc.address || '')}</div>
+          <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:4px; font-size:11.5px; color:var(--text-3);">
+            <span>📍 ${loc.latitude ? loc.latitude.toFixed(4) : ''}, ${loc.longitude ? loc.longitude.toFixed(4) : ''}${acc}</span>
+            <span>🕒 ${esc(loc.timezone || 'UTC')}</span>
+            <span>🔄 ${esc(loc.updated?.slice(0, 16) || '')}</span>
+          </div>
+          ${loc.maps_url ? `<div style="margin-top:6px;"><a href="${esc(loc.maps_url)}" target="_blank" rel="noopener" style="font-size:12px; color:var(--accent); text-decoration:none; font-weight:600;">View in Google Maps ↗</a></div>` : ''}
+        </div>
+
+        <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+          <div style="font-weight:600; font-size:13px;">Manual Override</div>
+          <div style="display:flex; gap:6px;">
+            <input type="text" id="manualPlaceInput" class="input" placeholder="City or hotel (e.g. Palma, Mallorca)" style="flex:1;">
+            <button class="btn btn-secondary btn-sm" id="btnSetPlace">Set</button>
+          </div>
+          <button class="btn btn-secondary btn-sm" id="btnResetHome" style="align-self:flex-start; margin-top:4px;">Reset to Home (Berlin)</button>
+        </div>
+      `;
+
+      $('#manualPlaceInput', body)?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') $('#btnSetPlace', body)?.click();
+      });
+      $('#btnSetPlace', body)?.addEventListener('click', async () => {
+        const p = $('#manualPlaceInput', body)?.value.trim();
+        if (!p) return;
+        try {
+          const res = await api('/api/location/set-place', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ place: p })
+          });
+          toast(`Location set to: ${res.location?.city || res.location?.address || p}`);
+          renderCard(res.location);
+          updateLocationSub();
+        } catch (err) {
+          toast(`Failed: ${err.message}`, 'err');
+        }
+      });
+      $('#btnResetHome', body)?.addEventListener('click', async () => {
+        try {
+          const res = await api('/api/location/reset-home', { method: 'POST' });
+          toast('Location reset to Home (Berlin)');
+          renderCard(res.location);
+          updateLocationSub();
+        } catch (err) {
+          toast(`Failed: ${err.message}`, 'err');
+        }
+      });
+    };
+
+    $('#btnSyncGps', body)?.addEventListener('click', () => {
+      syncBrowserLocation(true).then(() => {
+        api('/api/location').then(renderCard).catch(() => {});
+      });
+    });
+
+    try {
+      const loc = await api('/api/location');
+      renderCard(loc);
+    } catch (e) {
+      cont.innerHTML = `<div style="color:var(--text-2); text-align:center; padding:16px;">Failed to load location: ${esc(e.message)}</div>`;
+    }
+  });
+}
+
 function openChatMenu() {
   const g = state.git;
+  const agentKey = state.agent || 'antigravity';
+  const selVoice = getAgentVoice(agentKey);
+  const vName = selVoice ? selVoice.split('-')[2]?.replace('Neural','').replace('Expressive','') : 'Christopher';
+  const agentObj = AGENTS[agentKey] || AGENTS.antigravity;
   openSheet(`
     <h3>${esc(state.title || 'This conversation')}</h3>
     <div>
       <button class="opt" data-action="new-chat"><span class="opt-ico" style="background:rgba(124, 140, 255, 0.16); color:#7c8cff;">${icon('i-plus')}</span><span class="opt-main"><span class="opt-title">New chat</span><br><span class="opt-sub">Start a fresh conversation</span></span></button>
-      <button class="opt" data-action="open-agents"><span class="opt-ico">${icon(AGENTS[state.agent].icon)}</span><span class="opt-main"><span class="opt-title">Agent &amp; model</span><br><span class="opt-sub">${esc(agentLabel(state.agent, currentModel()))}</span></span></button>
-      <button class="opt" data-action="open-workspaces"><span class="opt-ico">${icon('i-folder')}</span><span class="opt-main"><span class="opt-title">Workspace</span><br><span class="opt-sub mono">${esc(state.workspace)}</span></span></button>
+      <button class="opt" data-action="open-agents"><span class="opt-ico">${icon(agentObj.icon || 'i-sparkle')}</span><span class="opt-main"><span class="opt-title">Agent &amp; model</span><br><span class="opt-sub">${esc(agentLabel(agentKey, currentModel()))}</span></span></button>
+      <button class="opt" data-action="open-voice-picker"><span class="opt-ico" style="background:rgba(236, 72, 153, 0.16); color:#ec4899;">${icon('i-volume')}</span><span class="opt-main"><span class="opt-title">Speech voice</span><br><span class="opt-sub">${esc(vName)} (Neural Human)</span></span></button>
+      <button class="opt" data-action="open-workspaces"><span class="opt-ico">${icon('i-folder')}</span><span class="opt-main"><span class="opt-title">Workspace</span><br><span class="opt-sub mono">${esc(state.workspace || '/root')}</span></span></button>
       ${g ? `<button class="opt" data-action="open-git-changes"><span class="opt-ico">${icon('i-git')}</span><span class="opt-main"><span class="opt-title">Code changes</span><br><span class="opt-sub">${g.files.length} files · +${g.total_adds} −${g.total_dels}</span></span></button>` : ''}
       <button class="opt" data-action="open-qr"><span class="opt-ico">${icon('i-qr')}</span><span class="opt-main"><span class="opt-title">Open on phone</span><br><span class="opt-sub">Show a QR code for this app</span></span></button>
       ${state.sessionId ? `<button class="opt danger" data-del="${esc(state.sessionId)}"><span class="opt-ico">${icon('i-trash')}</span><span class="opt-main"><span class="opt-title">Delete conversation</span></span></button>` : ''}
@@ -3905,7 +5454,19 @@ function openChatMenu() {
    Event wiring
    ════════════════════════════════════════════════════════════ */
 
+function setInspectorOpen(open, focusToggle = false) {
+  document.body.classList.toggle('inspector-closed', !open);
+  store.set('inspectorOpen', open);
+  const toggle = $('#inspectorToggle');
+  toggle.setAttribute('aria-expanded', String(open));
+  toggle.setAttribute('aria-label', open ? 'Close run details' : 'Open run details');
+  toggle.title = open ? 'Close run details' : 'Open run details';
+  if (focusToggle) toggle.focus();
+}
+
 const actions = {
+  'toggle-inspector': () => setInspectorOpen(document.body.classList.contains('inspector-closed')),
+  'close-inspector': () => setInspectorOpen(false, true),
   'toggle-nav': toggleNav,
   'open-nav': openNav,
   'close-nav': closeNav,
@@ -3913,6 +5474,8 @@ const actions = {
   'go-home': () => newChat({ focus: false }),
   'open-chat-menu': openChatMenu,
   'open-vault': openVaultSheet,
+  'open-connectors': openConnectorsSheet,
+  'open-location': openLocationSheet,
   'open-create-menu': () => {
     const mcp = skillsPanelActive === 'mcp';
     openSheet(`
@@ -3921,6 +5484,7 @@ const actions = {
       <button class="opt" data-action="${mcp ? 'open-mcp-gen' : 'open-skill-gen'}"><span class="opt-ico">${icon('i-sparkle')}</span><span class="opt-main"><span class="opt-title">Describe it, an agent drafts it</span><br><span class="opt-sub">You review before saving</span></span></button>`);
   },
   'open-agents': openAgentSheet,
+  'open-voice-picker': openVoicePickerSheet,
   'open-workspaces': openFolderPicker,
   'open-git-changes': () => openGitChangesSheet(),
   'view-file-diff': (el) => openGitChangesSheet(el.dataset.file),
@@ -3941,7 +5505,9 @@ const actions = {
   'test-voice': testVoice,
   'voice-close': voiceClose,
   'voice-orb': vcOrbTap,
-  'voice-mute': () => { vc.muted = !vc.muted; store.set('voiceMuted', vc.muted); vcSyncMute(); if (vc.muted) { stopSpeaking(); if (vc.phase === 'speaking') vcListen(); } },
+  'voice-mute': () => { vc.muted = !vc.muted; store.set('voiceMuted', vc.muted); vcSyncMute(); if (vc.muted) { if (live.on) { liveSilence(); live.turnDone = true; liveIdleCheck(); } else { stopSpeaking(); if (vc.phase === 'speaking') vcListen(); } } },
+  'voice-engine': (el) => voiceEngineSet(el.dataset.engine),
+  'voice-headphones': () => voiceHeadphonesToggle(),
   'mic-stop': stopMic,
   'mic-cancel': cancelMic,
   'jump-bottom': () => { state.stick = true; scrollToBottom(true); $('#jumpBtn').hidden = true; },
@@ -4006,8 +5572,20 @@ document.addEventListener('click', async (e) => {
   }
 
   const t = e.target;
+  if (!navDesktop.matches && t.closest('#rail [data-tab], #rail [data-files-tab], #rail [data-action="new-chat"], #rail [data-session]')) closeNav();
   const q = (s) => t.closest(s);
   let el;
+
+  if ((el = q('a[data-smart-tel], a[data-smart-link]'))) {
+    e.preventDefault();
+    if (el.dataset.smartTel) openPhoneSheet(el.dataset.smartTel, el.textContent);
+    else openLinkSheet(el.dataset.smartLink);
+    return;
+  }
+  if ((el = q('[data-copy-val]'))) {
+    toast((await copyText(el.dataset.copyVal)) ? 'Copied' : 'Copy failed', 'ok'); haptic(6); closeSheet();
+    return;
+  }
 
   const clickedSwipeRow = q('.swipe-row');
   if (clickedSwipeRow && clickedSwipeRow.dataset.swiped === 'true') {
@@ -4126,6 +5704,16 @@ document.addEventListener('click', async (e) => {
     switchTab('history');
     return;
   }
+  if ((el = q('[data-toggle-rail-folder]'))) {
+    const ws = el.dataset.toggleRailFolder;
+    if (state.collapsedRailWs.has(ws)) state.collapsedRailWs.delete(ws); else state.collapsedRailWs.add(ws);
+    store.set('collapsedRailWs', [...state.collapsedRailWs]);
+    renderRail();
+    $('#railRecent').querySelectorAll('[data-toggle-rail-folder]').forEach((button) => {
+      if (button.dataset.toggleRailFolder === ws) button.focus();
+    });
+    return;
+  }
   if ((el = q('[data-expand-ws]'))) {
     const ws = el.dataset.expandWs;
     if (state.expandedWs.has(ws)) state.expandedWs.delete(ws); else state.expandedWs.add(ws);
@@ -4218,186 +5806,6 @@ document.addEventListener('keydown', (e) => {
 // Keep the terminal's on-screen keyboard from stealing focus on key taps
 $('#keybar').addEventListener('mousedown', (e) => e.preventDefault());
 
-const input = $('#promptInput');
-input.addEventListener('input', () => { autosize(); store.set('draft', input.value); updateMention(); });
-input.addEventListener('blur', () => setTimeout(closeMention, 150));
-input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && state.prefs.enter) { e.preventDefault(); send(); }
-});
-// Bring the composer into view when the on-screen keyboard opens
-input.addEventListener('focus', () => setTimeout(() => state.stick && scrollToBottom(true), 300));
-
-threadEl().addEventListener('scroll', onThreadScroll, { passive: true });
-$('#historySearch')?.addEventListener('input', renderHistory);
-$('#skillsSearch')?.addEventListener('input', renderSkills);
-$('#mcpSearch')?.addEventListener('input', renderMcp);
-
-$('#pref5hBudget')?.addEventListener('change', (e) => {
-  const val = Math.max(1000, parseInt(e.target.value) || 200000);
-  state.prefs.fiveHourBudget = val;
-  store.set('pref.fiveHourBudget', val);
-  pollUsage();
-  toast(`5h Quota Target updated to ${formatTokens(val)} tok`, 'ok');
-});
-$('#prefWeeklyBudget')?.addEventListener('change', (e) => {
-  const val = Math.max(5000, parseInt(e.target.value) || 1500000);
-  state.prefs.weeklyBudget = val;
-  store.set('pref.weeklyBudget', val);
-  pollUsage();
-  toast(`Weekly Quota Target updated to ${formatTokens(val)} tok`, 'ok');
-});
-
-$('#prefNotifications')?.addEventListener('change', async (e) => {
-  state.prefs.notifications = e.target.checked;
-  store.set('pref.notifications', e.target.checked);
-  if (e.target.checked) {
-    const granted = await requestNotificationPermission();
-    if (granted) {
-      toast('Notifications enabled', 'ok');
-    } else if (Notification.permission === 'denied') {
-      toast('Notifications are blocked by your browser settings', 'err');
-    }
-  }
-});
-$('#prefSound')?.addEventListener('change', (e) => {
-  state.prefs.sound = e.target.checked;
-  store.set('pref.sound', e.target.checked);
-  if (e.target.checked) playCompletionChime();
-});
-$('#prefEnter')?.addEventListener('change', (e) => { state.prefs.enter = e.target.checked; store.set('pref.enter', e.target.checked); updateHint(); });
-$('#prefHaptics')?.addEventListener('change', (e) => { state.prefs.haptics = e.target.checked; store.set('pref.haptics', e.target.checked); haptic(12); });
-
-document.addEventListener('visibilitychange', () => {
-  syncMonitorPolling();
-  if (document.hidden) {
-    // App backgrounded or screen locked: stop recording so hardware microphone is cleanly released
-    if (vc.open) {
-      if (vc.phase === 'listening') {
-        vc.cancelled = true;
-        vcStopListening();
-        vcPhase('idle', 'Tap to talk');
-      }
-      if (vc.stream) {
-        try { vc.stream.getTracks().forEach((t) => t.stop()); } catch {}
-        vc.stream = null;
-      }
-    }
-    if (voice.active) {
-      cancelMic();
-    }
-  } else {
-    // App foregrounded / unlocked: resume audio subsystem and ensure idle state
-    unlockAudio();
-    checkForUpdate();
-    checkTunnel();
-    if (state.tab === 'history') loadSessions(true);
-    if (vc.open) {
-      if (vc.phase === 'listening') {
-        vcPhase('idle', 'Tap to talk');
-      }
-      if (vc.ctx && vc.ctx.state === 'suspended') {
-        try { vc.ctx.resume(); } catch {}
-      }
-    }
-  }
-});
-
-window.addEventListener('pageshow', () => {
-  unlockAudio();
-  if (vc.open && vc.ctx && vc.ctx.state === 'suspended') {
-    try { vc.ctx.resume(); } catch {}
-  }
-});
-
-window.addEventListener('focus', () => {
-  if (vc.open && vc.ctx && vc.ctx.state === 'suspended') {
-    try { vc.ctx.resume(); } catch {}
-  }
-});
-window.addEventListener('online', () => { setConn(true); checkTunnel(); });
-window.addEventListener('offline', () => setConn(false));
-window.addEventListener('resize', () => { if (state.tab === 'terminal' && fit) { try { fit.fit(); } catch {} } });
-
-/* ════════════════════════════════════════════════════════════
-   Auto-update — pick up new versions without a manual refresh
-   ════════════════════════════════════════════════════════════ */
-
-let knownBuild = null, updateNoted = false;
-
-async function checkForUpdate() {
-  try {
-    const { build } = await api('/api/version');
-    if (knownBuild === null) { knownBuild = build; return; }
-    if (build === knownBuild) return;
-    const busy = state.streaming || vc.open || voice.active;
-    if (!busy) { location.reload(); return; }         // drafts and the open conversation are restored on load
-    if (!updateNoted) { updateNoted = true; toast('Update ready — it will apply when you finish', 'ok'); }
-  } catch { /* offline */ }
-}
-
-/* ════════════════════════════════════════════════════════════
-   Boot
-   ════════════════════════════════════════════════════════════ */
-
-// iOS home-screen apps with a translucent status bar get a viewport that is short by the
-// status-bar height, which leaves an empty band under the tab bar and the composer.
-// Size the app to the physical screen there instead.
-function fitStandaloneHeight() {
-  const root = document.documentElement;
-  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  const standalone = navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
-  const portrait = window.matchMedia('(orientation: portrait)').matches;
-  if (!ios || !standalone || !portrait) { root.style.removeProperty('--app-h'); return; }
-  const full = Math.max(screen.width, screen.height);
-  const gap = full - window.innerHeight;
-  if (gap >= 0 && gap < 80) root.style.setProperty('--app-h', `${full}px`);
-  else root.style.removeProperty('--app-h');
-}
-fitStandaloneHeight();
-window.addEventListener('resize', fitStandaloneHeight);
-window.addEventListener('orientationchange', () => setTimeout(fitStandaloneHeight, 300));
-window.addEventListener('pageshow', fitStandaloneHeight);
-
-async function boot() {
-  applySize();
-  applyAgent();
-  applyWorkspace();
-  updateHint();
-  renderEmpty();
-  switchTab('chat');
-  initSwipeToDelete();
-
-  const draft = store.get('draft', '');
-  if (draft) { input.value = draft; }
-  autosize();
-  setStreaming(false);
-
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
-    navigator.serviceWorker.addEventListener('message', (e) => {
-      if (e.data?.type === 'OPEN_SESSION' && e.data.sessionId) {
-        openSession(e.data.sessionId);
-      }
-    });
-  }
-
-  loadModels();
-  await Promise.all([loadWorkspaces(), loadSessions(true), checkTunnel()]);
-  checkGitChanges();
-  setInterval(checkTunnel, 30000);
-  setInterval(checkGitChanges, 10000);
-  checkForUpdate();
-  setInterval(checkForUpdate, 45000);
-  setInterval(() => { if (!document.hidden && (state.running.size || state.tab === 'history')) loadSessions(true); }, 5000);
-
-  // Start on the Chats home. A reload of the same tab (e.g. an auto-update) reopens the conversation it had open.
-  const fresh = new URLSearchParams(location.search).has('new');
-  const last = sessionStorage.getItem('ah.open');
-  if (!fresh && last && state.sessions.some((s) => s.id === last)) await openSession(last);
-  else if (fresh) input.focus();
-}
-
-boot();
 /* ════════════════════════════════════════════════════════════
    @-mention picker (MCP servers & connectors)
    ════════════════════════════════════════════════════════════ */
@@ -4478,7 +5886,19 @@ function renderMention() {
       <span class="mention-main"><span class="mention-name">${esc(m.label)}</span><span class="mention-sub">${esc(m.sub)}</span></span>
       <span class="mention-kind">${m.kind === 'MCP' ? 'MCP' : 'Connector'}</span>
     </div>`).join('');
+  fitMention();
   el.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+}
+
+// Home opens the picker downward: cap its height to the visible area above the keyboard
+function fitMention() {
+  const el = $('#mentionMenu');
+  if (!el || el.hidden) return;
+  if (!$('#view-chat')?.classList.contains('is-home')) { el.style.maxHeight = ''; return; }
+  const vv = window.visualViewport;
+  const bottom = vv ? vv.offsetTop + vv.height : innerHeight;
+  const top = el.getBoundingClientRect().top;
+  el.style.maxHeight = Math.max(120, Math.min(300, bottom - top - 12)) + 'px';
 }
 
 function pickMention(i) {
@@ -4493,6 +5913,17 @@ function pickMention(i) {
   closeMention(); autosize(); store.set('draft', t.value); t.focus();
 }
 
+const input = $('#promptInput');
+input.addEventListener('input', () => { autosize(); store.set('draft', input.value); updateMention(); });
+// Keep the picker open when the keyboard is dismissed; close only on outside tap
+document.addEventListener('pointerdown', (e) => {
+  if (mentionState.open && !e.target.closest('#mentionMenu') && e.target !== input) closeMention();
+});
+if (window.visualViewport) {
+  visualViewport.addEventListener('resize', () => mentionState.open && fitMention());
+  visualViewport.addEventListener('scroll', () => mentionState.open && fitMention());
+}
+input.addEventListener('keydown', (e) => {
   if (mentionState.open) {
     const n = mentionState.items.length;
     if (e.key === 'ArrowDown') { e.preventDefault(); mentionState.idx = (mentionState.idx + 1) % n; return renderMention(); }
@@ -4500,3 +5931,239 @@ function pickMention(i) {
     if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return pickMention(mentionState.idx); }
     if (e.key === 'Escape') { e.preventDefault(); return closeMention(); }
   }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && state.prefs.enter) { e.preventDefault(); send(); }
+});
+// Bring the composer into view when the on-screen keyboard opens
+input.addEventListener('focus', () => setTimeout(() => state.stick && scrollToBottom(true), 300));
+
+threadEl().addEventListener('scroll', onThreadScroll, { passive: true });
+$('#historySearch')?.addEventListener('input', renderHistory);
+$('#skillsSearch')?.addEventListener('input', renderSkills);
+$('#mcpSearch')?.addEventListener('input', renderMcp);
+
+$('#pref5hBudget')?.addEventListener('change', (e) => {
+  const val = Math.max(1000, parseInt(e.target.value) || 200000);
+  state.prefs.fiveHourBudget = val;
+  store.set('pref.fiveHourBudget', val);
+  pollUsage();
+  toast(`5h Quota Target updated to ${formatTokens(val)} tok`, 'ok');
+});
+$('#prefWeeklyBudget')?.addEventListener('change', (e) => {
+  const val = Math.max(5000, parseInt(e.target.value) || 1500000);
+  state.prefs.weeklyBudget = val;
+  store.set('pref.weeklyBudget', val);
+  pollUsage();
+  toast(`Weekly Quota Target updated to ${formatTokens(val)} tok`, 'ok');
+});
+
+$('#prefNotifications')?.addEventListener('change', async (e) => {
+  state.prefs.notifications = e.target.checked;
+  store.set('pref.notifications', e.target.checked);
+  if (e.target.checked) {
+    const granted = await requestNotificationPermission();
+    if (granted) {
+      toast('Notifications enabled', 'ok');
+    } else if (Notification.permission === 'denied') {
+      toast('Notifications are blocked by your browser settings', 'err');
+    }
+  }
+});
+$('#prefSound')?.addEventListener('change', (e) => {
+  state.prefs.sound = e.target.checked;
+  store.set('pref.sound', e.target.checked);
+  if (e.target.checked) playCompletionChime();
+});
+$('#prefEnter')?.addEventListener('change', (e) => { state.prefs.enter = e.target.checked; store.set('pref.enter', e.target.checked); updateHint(); });
+$('#prefHaptics')?.addEventListener('change', (e) => { state.prefs.haptics = e.target.checked; store.set('pref.haptics', e.target.checked); haptic(12); });
+
+document.addEventListener('visibilitychange', () => {
+  syncMonitorPolling();
+  if (document.hidden) {
+    // App backgrounded or screen locked: stop recording so hardware microphone is cleanly released
+    if (vc.open) {
+      if (vc.phase === 'listening') {
+        vc.cancelled = true;
+        vcStopListening();
+        vcPhase('idle', 'Tap to talk');
+      }
+      if (vc.stream) {
+        try { vc.stream.getTracks().forEach((t) => t.stop()); } catch {}
+        vc.stream = null;
+      }
+    }
+    if (voice.active) {
+      cancelMic();
+    }
+  } else {
+    // App foregrounded / unlocked: resume audio subsystem, sync messages, and ensure idle state
+    unlockAudio();
+    checkForUpdate();
+    checkTunnel();
+    syncCurrentSession();
+    loadSessions(true);
+    if (vc.open) {
+      if (vc.phase === 'speaking' && ttsAudio.paused && !ttsAudio.ended && ttsAudio.src) {
+        try { ttsAudio.play(); } catch {}
+      } else if (vc.phase === 'listening') {
+        vcPhase('idle', 'Tap to talk');
+      }
+      if (vc.ctx && vc.ctx.state === 'suspended') {
+        try { vc.ctx.resume(); } catch {}
+      }
+    }
+  }
+});
+
+window.addEventListener('pageshow', () => {
+  unlockAudio();
+  if (vc.open && vc.ctx && vc.ctx.state === 'suspended') {
+    try { vc.ctx.resume(); } catch {}
+  }
+});
+
+window.addEventListener('focus', () => {
+  if (vc.open && vc.ctx && vc.ctx.state === 'suspended') {
+    try { vc.ctx.resume(); } catch {}
+  }
+});
+window.addEventListener('online', () => { setConn(true); checkTunnel(); });
+window.addEventListener('offline', () => setConn(false));
+window.addEventListener('resize', () => { if (state.tab === 'terminal' && fit) { try { fit.fit(); } catch {} } });
+
+/* ════════════════════════════════════════════════════════════
+   Auto-update — pick up new versions without a manual refresh
+   ════════════════════════════════════════════════════════════ */
+
+let knownBuild = null, updateNoted = false;
+
+async function checkForUpdate() {
+  try {
+    const { build } = await api('/api/version');
+    if (knownBuild === null) { knownBuild = build; return; }
+    if (build === knownBuild) return;
+    // Don't auto-reload and disrupt the user's active session or open sheets.
+    if (!updateNoted) {
+      updateNoted = true;
+      toast('Update available · Pull or refresh to update', 'ok');
+    }
+  } catch { /* offline */ }
+}
+
+/* ════════════════════════════════════════════════════════════
+   Cross-device message sync — poll for new messages in the open conversation
+   ════════════════════════════════════════════════════════════ */
+
+let _syncKnownCount = 0;
+
+async function syncCurrentSession() {
+  if (state.streaming || !state.sessionId || document.hidden) return;
+  try {
+    const { count } = await api(`/api/sessions/${encodeURIComponent(state.sessionId)}/message-count`);
+    if (count > _syncKnownCount) {
+      _syncKnownCount = count;
+      const data = await api(`/api/sessions/${encodeURIComponent(state.sessionId)}`);
+      const newMsgs = (data.messages || []).map((m) => ({
+        role: m.role, content: m.content, agent: m.agent || data.agent,
+        model: m.model || null, tokens: m.tokens != null ? m.tokens : null, ts: m.timestamp
+      }));
+      if (newMsgs.length > state.messages.length) {
+        state.messages = newMsgs;
+        threadEl().innerHTML = '';
+        state.messages.forEach((m) => {
+          if (m.role === 'user') addUserMessage(m.content, m.ts);
+          else addAssistantMessage({ content: m.content, agent: AGENTS[m.agent] ? m.agent : 'antigravity', ts: m.ts, model: m.model, tokens: m.tokens });
+        });
+        scrollToBottom(true);
+        const run = await api(`/api/runs/${encodeURIComponent(state.sessionId)}`).catch(() => ({ running: false }));
+        if (run.running && !state.streaming) {
+          const agentKey = AGENTS[run.agent] ? run.agent : state.agent;
+          const el = addAssistantMessage({ agent: agentKey, streaming: true, model: run.model || null });
+          scrollToBottom(true);
+          drive(el, agentKey, (signal) => fetch(`/api/runs/${encodeURIComponent(state.sessionId)}/stream`, { signal }));
+        }
+      }
+    }
+  } catch { /* offline or session deleted */ }
+}
+
+function resetSyncCount() {
+  _syncKnownCount = state.messages.length;
+}
+
+/* ════════════════════════════════════════════════════════════
+   Boot
+   ════════════════════════════════════════════════════════════ */
+
+// iOS home-screen apps with a translucent status bar get a viewport that is short by the
+// status-bar height, which leaves an empty band under the tab bar and the composer.
+// Size the app to the physical screen there instead.
+function fitStandaloneHeight() {
+  const root = document.documentElement;
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+  const portrait = window.matchMedia('(orientation: portrait)').matches;
+  if (!ios || !standalone || !portrait) { root.style.removeProperty('--app-h'); return; }
+  const full = Math.max(screen.width, screen.height);
+  const gap = full - window.innerHeight;
+  if (gap >= 0 && gap < 80) root.style.setProperty('--app-h', `${full}px`);
+  else root.style.removeProperty('--app-h');
+}
+fitStandaloneHeight();
+window.addEventListener('resize', fitStandaloneHeight);
+window.addEventListener('orientationchange', () => setTimeout(fitStandaloneHeight, 300));
+window.addEventListener('pageshow', fitStandaloneHeight);
+
+async function boot() {
+  setInspectorOpen(store.get('inspectorOpen', true));
+  applySize();
+  applyAgent();
+  syncVoiceLabel();
+  applyWorkspace();
+  updateHint();
+  renderEmpty();
+  switchTab('chat');
+  initSwipeToDelete();
+
+  const draft = store.get('draft', '');
+  if (draft) { input.value = draft; }
+  autosize();
+  setStreaming(false);
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      if (e.data?.type === 'OPEN_SESSION' && e.data.sessionId) {
+        openSession(e.data.sessionId);
+      }
+    });
+  }
+
+  loadModels();
+  await Promise.all([loadWorkspaces(), loadSessions(true), checkTunnel()]);
+  checkGitChanges();
+  updateLocationSub();
+  syncBrowserLocation(false);
+  setInterval(checkTunnel, 30000);
+  setInterval(checkGitChanges, 10000);
+  setInterval(() => { if (!document.hidden) syncBrowserLocation(false); }, 300000);
+  window.addEventListener('focus', () => syncBrowserLocation(false));
+  checkForUpdate();
+  setInterval(checkForUpdate, 45000);
+  setInterval(() => { if (!document.hidden && (state.running.size || state.tab === 'history')) loadSessions(true); }, 5000);
+  setInterval(syncCurrentSession, 3000);
+
+  // Start on the Chats home. A reload of the same tab (e.g. an auto-update) reopens the conversation it had open.
+  const fresh = new URLSearchParams(location.search).has('new');
+  const last = sessionStorage.getItem('ah.open');
+  let resumed = false;
+  if (!fresh && last && state.sessions.some((s) => s.id === last)) { await openSession(last); resumed = true; }
+  if (!fresh && !resumed) {
+    try {
+      const { session_id: serverActive } = await api('/api/active-session');
+      if (serverActive && state.sessions.some((s) => s.id === serverActive)) { await openSession(serverActive); resumed = true; }
+    } catch { /* offline */ }
+  }
+  if (fresh) input.focus();
+}
+
+boot();

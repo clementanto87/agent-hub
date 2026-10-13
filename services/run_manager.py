@@ -36,6 +36,7 @@ class Run:
         self.started = time.time()
         self.finished: Optional[float] = None
         self.buf = bytearray()
+        self.prefix = ""               # text already shown/spoken before the agent's output (stored with it, not re-streamed)
         self.task: Optional[asyncio.Task] = None
         self._cond = asyncio.Condition()
 
@@ -120,15 +121,27 @@ class RunManager:
     async def _execute(self, run: Run, agent_prompt: str) -> None:
         status = "done"
         try:
-            async for chunk in stream_agent(run.agent, agent_prompt, run.workspace, model=run.model, session_id=run.session_id):
+            import importlib, services.agent_runner
+            importlib.reload(services.agent_runner)
+            note = None
+            if run.agent.lower() in ("auto", "smart", "router"):
+                from services import auto_router
+                r = auto_router.route(run.prompt)
+                run.agent, run.model, note = r.agent, r.model, r
+            first = True
+            async for chunk in services.agent_runner.stream_agent(run.agent, agent_prompt, run.workspace, model=run.model, session_id=run.session_id):
                 await run._push(chunk)
+                if first and note:      # right after the agent header, so the UI still relabels the message
+                    first = False
+                    await run._push(services.agent_runner._format_activity(
+                        "🧭", f"Auto → {note.agent}" + (f" · {note.model}" if note.model else ""), note.reason, False))
         except asyncio.CancelledError:
             status = "stopped"           # agent_runner's finally block kills the process tree
         except Exception as e:           # surfaced to the user as part of the reply
             await run._push(f"\n[Error executing {run.agent}: {e}]")
             status = "error"
         finally:
-            text = run.buf.decode("utf-8", errors="replace")
+            text = run.prefix + run.buf.decode("utf-8", errors="replace")
             if text.strip():
                 prompt_tokens = estimate_tokens(run.prompt)
                 reply_tokens = estimate_tokens(text)

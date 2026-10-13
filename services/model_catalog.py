@@ -21,7 +21,7 @@ from typing import Dict, List, Optional
 
 CACHE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "models_cache.json")
 TTL_SEC = 6 * 3600
-AGENTS = ("antigravity", "claude", "codex")
+AGENTS = ("antigravity", "claude", "codex", "regina")
 MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,120}$")
 
 _lock = threading.Lock()
@@ -94,8 +94,30 @@ def _fetch_claude() -> dict:
     return {"models": models, "default": default}
 
 
-AGENTS = ("antigravity", "claude", "codex")
-_FETCHERS = {"antigravity": _fetch_antigravity, "codex": _fetch_codex, "claude": _fetch_claude}
+AGENTS = ("antigravity", "claude", "codex", "regina")
+REGINA_MODELS = [
+    {"id": "claude-haiku-5-5", "name": "Claude Haiku 5.5", "description": "High-throughput automated pipelines · 80,000 TPM limit immunity"},
+    {"id": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5", "description": "Frontier coding & deep reasoning · 80,000 TPM ceiling"},
+    {"id": "gpt-5.4-nano", "name": "GPT-5.4 Nano", "description": "Ultra-low cost & highest throughput · 5,000,000 TPM / 5,000 RPM"},
+    {"id": "gpt-5.4-mini-agent", "name": "GPT-5.4 Mini", "description": "High-throughput smart workhorse · 1,000,000 TPM / 1,000 RPM"},
+    {"id": "deepseek-v4-1-flash", "name": "DeepSeek-V4.1 Flash", "description": "Open-weight frontier flash · 1,000,000 TPM / 1,000 RPM"},
+    {"id": "deepseek-v4-flash", "name": "DeepSeek-V4 Flash", "description": "Lightweight open reasoning flash · 250,000 TPM"},
+    {"id": "kimi-k2-5", "name": "Kimi-K2.5", "description": "MoonshotAI reasoning model · 100,000 TPM"},
+    {"id": "kimi-k2-6", "name": "Kimi-K2.6", "description": "MoonshotAI advanced long-context · 100,000 TPM"},
+    {"id": "kimi-k2-7-code", "name": "Kimi-K2.7 Code", "description": "MoonshotAI specialized coding model · 100,000 TPM"},
+    {"id": "gpt-6.1-sol-agent", "name": "GPT-6.1 Sol", "description": "Powerful general-purpose & coding flagship · 100,000 TPM · EU"},
+    {"id": "gpt-6-astra-agent", "name": "GPT-6 Astra", "description": "Advanced reasoning flagship · 100,000 TPM · Global"},
+    {"id": "gpt-5.4-mini", "name": "GPT-5.4 Mini (Legacy)", "description": "Standard compact model · 10,000 TPM"},
+]
+
+
+def _fetch_regina() -> dict:
+    # Only advertise deployments provisioned and verified in our Foundry account.
+    return {"models": REGINA_MODELS, "default": "gpt-5.4-mini-agent"}
+
+
+_FETCHERS = {"regina": _fetch_regina, "antigravity": _fetch_antigravity, "codex": _fetch_codex, "claude": _fetch_claude}
+
 
 
 # ── public API ─────────────────────────────────────────────────────────────
@@ -107,6 +129,8 @@ def get_catalog(agent: str, refresh: bool = False) -> dict:
     with _lock:
         _load_disk()
         cached = _cache.get(agent)
+    if agent == "regina" and cached and cached.get("models") != REGINA_MODELS:
+        cached = None
     fresh = cached and time.time() - cached.get("fetched_at", 0) < TTL_SEC
     if fresh and not refresh:
         return {**cached, "source": "cache"}
@@ -128,6 +152,8 @@ def get_catalog(agent: str, refresh: bool = False) -> dict:
 
 def is_valid(agent: str, model: Optional[str]) -> bool:
     """A model is accepted if it's well-formed and in the agent's current catalog (when one is known)."""
+    if agent == "regina":
+        return not model or model in {m["id"] for m in REGINA_MODELS}
     if not model:
         return True
     if not MODEL_ID_RE.match(model):

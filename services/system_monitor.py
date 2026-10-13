@@ -3,8 +3,11 @@ import time
 import os
 import subprocess
 
+# Seed psutil cpu counter on startup
+psutil.cpu_percent(interval=None)
+
 def get_system_stats():
-    cpu_percent = psutil.cpu_percent(interval=0.2)
+    cpu_percent = psutil.cpu_percent(interval=None)
     memory = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
     boot_time = psutil.boot_time()

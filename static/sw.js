@@ -5,6 +5,8 @@ const SHELL = [
   '/',
   '/static/styles.css?v=__BUILD__',
   '/static/app.js?v=__BUILD__',
+  '/static/live.js?v=__BUILD__',
+  '/static/vadvoice.js?v=__BUILD__',
   '/manifest.json',
   '/static/icons/icon-192.png',
   '/static/icons/icon-512.png',

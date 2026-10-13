@@ -24,3 +24,8 @@ venv/
 Thumbs.db
 .vscode/
 .idea/
+
+# Local portal screenshots and generated login QR
+/static/casavi-home.png
+/static/casavi-docs.png
+/static/whatsapp-qr.png

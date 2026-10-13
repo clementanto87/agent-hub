@@ -5,6 +5,7 @@ import asyncio
 import struct
 import fcntl
 import termios
+import codecs
 from fastapi import WebSocket
 
 class TerminalManager:
@@ -37,13 +38,24 @@ class TerminalManager:
             os.close(slave_fd)
             loop = asyncio.get_event_loop()
 
+            # Incremental so a multi-byte character split across reads isn't garbled.
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+            def write_all(data: bytes):
+                # os.write on a pty can be partial (big pastes), so loop until done.
+                while data:
+                    n = os.write(master_fd, data)
+                    data = data[n:]
+
             async def read_from_pty():
                 try:
                     while True:
-                        data = await loop.run_in_executor(None, os.read, master_fd, 1024)
+                        data = await loop.run_in_executor(None, os.read, master_fd, 65536)
                         if not data:
                             break
-                        await websocket.send_text(data.decode("utf-8", errors="replace"))
+                        text = decoder.decode(data)
+                        if text:
+                            await websocket.send_text(text)
                 except Exception:
                     pass
 
@@ -60,7 +72,7 @@ class TerminalManager:
                         except Exception:
                             pass
                     else:
-                        os.write(master_fd, msg.encode("utf-8"))
+                        await loop.run_in_executor(None, write_all, msg.encode("utf-8"))
             except Exception:
                 pass
             finally:

@@ -70,6 +70,7 @@
     <!-- Agent glyphs -->
     <symbol id="a-antigravity" viewBox="0 0 24 24"><path d="M12 3.500c4.500 3 6.500 6.500 6.500 10.500L15 16.500H9L5.500 14c0-4 2-7.500 6.500-10.500Z"/><circle cx="12" cy="10.500" r="1.800"/><path d="M9 16.500 7.500 20.500M15 16.500l1.500 4M12 17v3.500"/></symbol>
     <symbol id="a-claude" viewBox="0 0 24 24"><path d="M12 3v18M3.800 7.500l16.400 9M3.800 16.500l16.400-9"/></symbol>
+    <symbol id="a-regina" viewBox="0 0 24 24"><path d="M12 3 15 8 21 9 17 14 18 20 12 17 6 20 7 14 3 9 9 8Z"/></symbol>
     <symbol id="a-codex" viewBox="0 0 24 24"><path d="M12 3 20 7.500v9L12 21l-8-4.500v-9Z"/><path d="m9.500 10.500-2 1.500 2 1.500M14.500 10.500l2 1.500-2 1.500"/></symbol>
     <symbol id="a-bash" viewBox="0 0 24 24"><path d="m5 8 4 4-4 4M12 17h7"/></symbol>
     <symbol id="a-auto" viewBox="0 0 24 24"><path d="M4 7h3.500c2.500 0 3.500 1.500 5 5s2.500 5 5 5H20M4 17h3.500c1 0 1.800-.4 2.500-1.100M13 8.100c.7-.7 1.500-1.100 2.500-1.100H20M17.500 4.500 20 7l-2.500 2.500M17.500 14.500 20 17l-2.500 2.500"/></symbol>
@@ -84,6 +85,7 @@
       <div class="brand">
         <div class="brand-mark"><svg class="i"><use href="#i-sparkle"/></svg></div>
         <span class="brand-name">AgentHub</span>
+        <button class="icon-btn rail-close" data-action="close-nav" aria-label="Close navigation" title="Close navigation"><svg class="i"><use href="#i-x"/></svg></button>
       </div>
       <button class="btn btn-primary btn-block" data-action="new-chat">
         <svg class="i"><use href="#i-plus"/></svg> New task
@@ -107,10 +109,13 @@
     </div>
   </aside>
 
+  <button class="nav-backdrop" id="navBackdrop" data-action="close-nav" aria-label="Close navigation" hidden></button>
+
   <!-- ───────────── Main column ───────────── -->
   <div class="main">
 
     <header class="topbar">
+      <button class="icon-btn" id="navToggle" data-action="toggle-nav" aria-label="Toggle navigation" aria-controls="rail" aria-expanded="false" title="Toggle navigation"><svg class="i"><use href="#i-menu"/></svg></button>
       <button class="icon-btn back-btn" id="backBtn" data-action="go-home" aria-label="Back to chats" hidden><svg class="i"><use href="#i-back"/></svg></button>
       <div class="topbar-title">
         <h1 id="viewTitle">AgentHub</h1>
@@ -123,13 +128,14 @@
         <button class="icon-btn" id="tbSearch" data-tab="history" aria-label="Search chats"><svg class="i"><use href="#i-search"/></svg></button>
         <button class="icon-btn" id="tbNewChat" data-action="new-chat" aria-label="New chat" title="Start new chat" hidden><svg class="i"><use href="#i-plus"/></svg></button>
         <button class="icon-btn" id="tbSettings" data-tab="settings" aria-label="Settings"><svg class="i"><use href="#i-sliders"/></svg></button>
+        <button class="btn btn-ghost btn-sm inspector-toggle" id="inspectorToggle" data-action="toggle-inspector" aria-label="Close run details" aria-controls="inspector" aria-expanded="true" title="Close run details">Details</button>
         <button class="icon-btn" id="tbMore" data-action="open-chat-menu" aria-label="Chat options" hidden><svg class="i"><use href="#i-more"/></svg></button>
       </div>
     </header>
 
     <div class="banner" id="httpsBanner" hidden>
       <svg class="i"><use href="#i-mic"/></svg>
-      <span>Voice input needs HTTPS on this device.</span>
+      <span id="httpsBannerText">Voice input needs HTTPS on this device.</span>
       <a id="httpsLink" href="#" class="banner-link">Open secure link</a>
     </div>
 
@@ -236,6 +242,8 @@
           </div>
           <div id="terminal-view"></div>
           <div class="keybar" id="keybar">
+            <button class="key wide" data-key="copy" aria-label="Copy">copy</button>
+            <button class="key wide" data-key="paste" aria-label="Paste">paste</button>
             <button class="key" data-key="esc">esc</button>
             <button class="key" data-key="tab">tab</button>
             <button class="key toggle" id="ctrlKey" data-key="ctrl">ctrl</button>
@@ -314,9 +322,19 @@
               <span class="row-main"><span class="row-title">Workspace</span><span class="row-sub mono" id="setWsSub"></span></span>
               <svg class="i xs muted"><use href="#i-chevron"/></svg>
             </button>
+            <button class="row" data-action="open-connectors">
+              <span class="row-icon"><svg class="i"><use href="#i-sparkle"/></svg></span>
+              <span class="row-main"><span class="row-title">Connectors</span><span class="row-sub">Gmail & Outlook mail access for agents</span></span>
+              <svg class="i xs muted"><use href="#i-chevron"/></svg>
+            </button>
             <button class="row" data-action="open-vault">
               <span class="row-icon"><svg class="i"><use href="#i-lock"/></svg></span>
               <span class="row-main"><span class="row-title">Encrypted Credentials Vault</span><span class="row-sub">Logins, 2FA/TOTP keys, & automated site logins</span></span>
+              <svg class="i xs muted"><use href="#i-chevron"/></svg>
+            </button>
+            <button class="row" data-action="open-location">
+              <span class="row-icon"><svg class="i"><use href="#i-globe"/></svg></span>
+              <span class="row-main"><span class="row-title">Live Location & Travel</span><span class="row-sub" id="setLocationSub">Browser GPS sync</span></span>
               <svg class="i xs muted"><use href="#i-chevron"/></svg>
             </button>
           </div>
@@ -379,6 +397,11 @@
               <span class="row-main"><span class="row-title">Secure tunnel</span><span class="row-sub mono" id="tunnelSub">Checking…</span></span>
               <button class="btn btn-sm" id="tunnelBtn" data-action="tunnel-toggle">Start</button>
             </div>
+            <button class="row" data-action="open-voice-picker">
+              <span class="row-icon"><svg class="i"><use href="#i-volume"/></svg></span>
+              <span class="row-main"><span class="row-title">Spoken voice</span><span class="row-sub" id="setVoiceSub">Christopher (Neural)</span></span>
+              <svg class="i xs muted"><use href="#i-chevron"/></svg>
+            </button>
             <div class="row">
               <span class="row-icon"><svg class="i"><use href="#i-volume"/></svg></span>
               <span class="row-main"><span class="row-title">Test spoken reply</span><span class="row-sub">Plays a sample the way voice mode does</span></span>
@@ -413,6 +436,7 @@
 
   <!-- ───────────── Run details (wide screens) ───────────── -->
   <aside class="inspector" id="inspector" aria-label="Run details">
+    <div class="inspector-heading"><span>Run details</span><button class="icon-btn" data-action="close-inspector" aria-label="Close run details" title="Close run details"><svg class="i"><use href="#i-x"/></svg></button></div>
     <section class="insp-sec">
       <h2>This run</h2>
       <div id="inspSteps" class="insp-steps"><span class="muted sm">Steps appear here while an agent works.</span></div>
@@ -440,8 +464,16 @@
 <div class="voice" id="voice" role="dialog" aria-modal="true" aria-label="Voice conversation" hidden>
   <div class="voice-top">
     <button class="icon-btn" data-action="voice-close" aria-label="End voice conversation"><svg class="i"><use href="#i-x"/></svg></button>
-    <button class="voice-agent" data-action="open-agents" aria-label="Change agent"><span class="dot"></span><span id="voiceAgent"></span><svg class="i xs"><use href="#i-chevron-down"/></svg></button>
+    <div style="display:flex; align-items:center; gap:8px;">
+      <button class="voice-agent" data-action="open-agents" aria-label="Change agent"><span class="dot"></span><span id="voiceAgent"></span><svg class="i xs"><use href="#i-chevron-down"/></svg></button>
+      <button class="voice-agent" data-action="open-voice-picker" aria-label="Change voice" style="font-size:13px;"><svg class="i xs" style="color:var(--text-3);"><use href="#i-volume"/></svg><span id="voiceName">Voice</span><svg class="i xs"><use href="#i-chevron-down"/></svg></button>
+    </div>
     <button class="icon-btn" id="voiceMute" data-action="voice-mute" aria-label="Mute spoken replies"><svg class="i"><use href="#i-volume"/></svg></button>
+  </div>
+  <div class="voice-engine" id="voiceEngine" role="group" aria-label="Voice engine">
+    <button data-action="voice-engine" data-engine="live" aria-pressed="true">Live</button>
+    <button data-action="voice-engine" data-engine="classic" aria-pressed="false">Standard</button>
+    <button data-action="voice-headphones" aria-pressed="false" title="Headphones: talk over the reply freely" aria-label="Headphones mode" hidden>🎧</button>
   </div>
   <div class="voice-stage">
     <button class="orb" id="orb" data-action="voice-orb" data-phase="idle" aria-label="Talk">
@@ -465,5 +497,7 @@
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
 <script src="/static/app.js?v=__BUILD__"></script>
+<script src="/static/live.js?v=__BUILD__"></script>
+<script src="/static/vadvoice.js?v=__BUILD__"></script>
 </body>
 </html>
